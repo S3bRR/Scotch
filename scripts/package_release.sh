@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+OUT_DIR="$ROOT_DIR/.release"
+APP_NAME="Scotch"
+APP_BUNDLE="$OUT_DIR/$APP_NAME.app"
+
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+
+cd "$ROOT_DIR"
+
+swift build -c release --product ScotchApp
+swift build -c release --product ScotchCmd
+swift build -c release --product ScotchThumbnail
+APP_BIN="$ROOT_DIR/.build/release/ScotchApp"
+CMD_BIN="$ROOT_DIR/.build/release/ScotchCmd"
+THUMBNAIL_BIN="$ROOT_DIR/.build/release/ScotchThumbnail"
+
+# Runtime/package parity checks for required artifacts.
+REQUIRED_PATHS=(
+  "$ROOT_DIR/Sources/ScotchRuntime/Resources/VulkanSpoof/libMoltenVK_shim.c"
+  "$ROOT_DIR/Sources/ScotchApp/Info.plist"
+  "$ROOT_DIR/Sources/ScotchApp/Scotch.entitlements"
+  "$ROOT_DIR/Sources/ScotchThumbnail/Info.plist"
+  "$ROOT_DIR/Sources/ScotchThumbnail/ScotchThumbnail.entitlements"
+)
+for path in "${REQUIRED_PATHS[@]}"; do
+  if [[ ! -e "$path" ]]; then
+    echo "Missing required release artifact source: $path"
+    exit 1
+  fi
+done
+
+mkdir -p "$APP_BUNDLE/Contents/MacOS"
+mkdir -p "$APP_BUNDLE/Contents/Resources"
+mkdir -p "$APP_BUNDLE/Contents/PlugIns"
+cp "$APP_BIN" "$APP_BUNDLE/Contents/MacOS/ScotchApp"
+cp "$CMD_BIN" "$APP_BUNDLE/Contents/MacOS/ScotchCmd"
+cp "$ROOT_DIR/Sources/ScotchApp/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+
+THUMBNAIL_APPEX="$APP_BUNDLE/Contents/PlugIns/ScotchThumbnail.appex"
+mkdir -p "$THUMBNAIL_APPEX/Contents/MacOS"
+cp "$THUMBNAIL_BIN" "$THUMBNAIL_APPEX/Contents/MacOS/ScotchThumbnail"
+cp "$ROOT_DIR/Sources/ScotchThumbnail/Info.plist" "$THUMBNAIL_APPEX/Contents/Info.plist"
+
+for bundle in "$ROOT_DIR"/.build/release/*.bundle; do
+  if [[ -e "$bundle" ]]; then
+    cp -R "$bundle" "$APP_BUNDLE/Contents/Resources/"
+  fi
+done
+
+find "$APP_BUNDLE/Contents/Resources" -name cabextract -exec chmod +x {} \;
+
+ICON_SRC="$ROOT_DIR/Sources/ScotchApp/Assets.xcassets/AppIcon.appiconset"
+if [[ -d "$ICON_SRC" ]] && command -v iconutil >/dev/null 2>&1; then
+  ICONSET_TMP="$OUT_DIR/AppIcon.iconset"
+  rm -rf "$ICONSET_TMP"
+  mkdir -p "$ICONSET_TMP"
+  cp "$ICON_SRC/16.png"   "$ICONSET_TMP/icon_16x16.png"   2>/dev/null || true
+  cp "$ICON_SRC/32.png"   "$ICONSET_TMP/icon_16x16@2x.png" 2>/dev/null || true
+  cp "$ICON_SRC/32.png"   "$ICONSET_TMP/icon_32x32.png"   2>/dev/null || true
+  cp "$ICON_SRC/64.png"   "$ICONSET_TMP/icon_32x32@2x.png" 2>/dev/null || true
+  cp "$ICON_SRC/128.png"  "$ICONSET_TMP/icon_128x128.png" 2>/dev/null || true
+  cp "$ICON_SRC/256.png"  "$ICONSET_TMP/icon_128x128@2x.png" 2>/dev/null || true
+  cp "$ICON_SRC/256.png"  "$ICONSET_TMP/icon_256x256.png" 2>/dev/null || true
+  cp "$ICON_SRC/512.png"  "$ICONSET_TMP/icon_256x256@2x.png" 2>/dev/null || true
+  cp "$ICON_SRC/512.png"  "$ICONSET_TMP/icon_512x512.png" 2>/dev/null || true
+  cp "$ICON_SRC/1024.png" "$ICONSET_TMP/icon_512x512@2x.png" 2>/dev/null || true
+  iconutil -c icns -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns" "$ICONSET_TMP"
+  rm -rf "$ICONSET_TMP"
+fi
+
+if command -v codesign >/dev/null 2>&1; then
+  CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+  codesign --force --sign "$CODESIGN_IDENTITY" \
+    --entitlements "$ROOT_DIR/Sources/ScotchApp/Scotch.entitlements" \
+    --options runtime \
+    "$APP_BUNDLE/Contents/MacOS/ScotchCmd"
+  codesign --force --sign "$CODESIGN_IDENTITY" \
+    --entitlements "$ROOT_DIR/Sources/ScotchThumbnail/ScotchThumbnail.entitlements" \
+    --options runtime \
+    "$THUMBNAIL_APPEX/Contents/MacOS/ScotchThumbnail"
+  codesign --force --sign "$CODESIGN_IDENTITY" \
+    --entitlements "$ROOT_DIR/Sources/ScotchThumbnail/ScotchThumbnail.entitlements" \
+    --options runtime \
+    "$THUMBNAIL_APPEX"
+  codesign --force --sign "$CODESIGN_IDENTITY" \
+    --entitlements "$ROOT_DIR/Sources/ScotchApp/Scotch.entitlements" \
+    --options runtime \
+    "$APP_BUNDLE"
+fi
+
+if command -v hdiutil >/dev/null 2>&1; then
+  DMG_PATH="$OUT_DIR/Scotch.dmg"
+  hdiutil create -volname "Scotch" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG_PATH" >/dev/null
+  echo "Created $DMG_PATH"
+else
+  echo "hdiutil unavailable; skipped DMG generation"
+fi
+
+echo "Release package staging complete at $APP_BUNDLE"
