@@ -15,8 +15,6 @@ public struct BottleDetailView: View {
     @State private var showWinetricks = false
     @State private var showAdvancedConfig = false
     @State private var navigationPath = NavigationPath()
-    @State private var showRunFilePicker = false
-    @State private var showAddPinPicker = false
 
     private let gridLayout = [GridItem(.adaptive(minimum: 110, maximum: .infinity), spacing: 12)]
 
@@ -189,22 +187,6 @@ public struct BottleDetailView: View {
         .sheet(isPresented: $showAdvancedConfig) {
             AdvancedConfigSheetView(viewModel: viewModel)
         }
-        .fileImporter(
-            isPresented: $showRunFilePicker,
-            allowedContentTypes: Self.runFileContentTypes,
-            allowsMultipleSelection: false,
-            onCompletion: { result in
-                handleRunFile(result.map { $0.first ?? URL(fileURLWithPath: "/") })
-            }
-        )
-        .fileImporter(
-            isPresented: $showAddPinPicker,
-            allowedContentTypes: Self.pinContentTypes,
-            allowsMultipleSelection: false,
-            onCompletion: { result in
-                handleAddPin(result.map { $0.first ?? URL(fileURLWithPath: "/") })
-            }
-        )
     }
 
     // MARK: - Pinned grid
@@ -328,27 +310,29 @@ public struct BottleDetailView: View {
     }
 
     private func runFile() {
-        showRunFilePicker = true
-    }
-
-    private func handleRunFile(_ result: Result<URL, Error>) {
-        if case .success(let url) = result {
+        Task {
+            guard let url = await AsyncOpenPanel.present(
+                directoryURL: bottleDriveCURL,
+                allowedContentTypes: Self.runFileContentTypes
+            ) else { return }
             programLoading = true
-            Task {
-                await viewModel.runFileURL(url)
-                programLoading = false
-            }
+            await viewModel.runFileURL(url)
+            programLoading = false
         }
     }
 
     private func addPin() {
-        showAddPinPicker = true
+        Task {
+            guard let url = await AsyncOpenPanel.present(
+                directoryURL: bottleDriveCURL,
+                allowedContentTypes: Self.pinContentTypes
+            ) else { return }
+            await viewModel.pinExecutable(at: url)
+        }
     }
 
-    private func handleAddPin(_ result: Result<URL, Error>) {
-        if case .success(let url) = result {
-            Task { await viewModel.pinExecutable(at: url) }
-        }
+    private var bottleDriveCURL: URL {
+        bottle.directoryURL.appending(path: "drive_c")
     }
 
     private func shortcut(_ program: ProgramRecord) {
