@@ -95,7 +95,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         releases: RuntimeReleases,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> DownloadedRuntimeArchives {
-        let temp = FileManager.default.temporaryDirectory.appending(path: "ScotchV2RuntimeDownloads")
+        let temp = FileManager.default.temporaryDirectory.appending(path: "ScotchRuntimeDownloads")
         if fileSystem.fileExists(at: temp) {
             try fileSystem.removeItem(at: temp)
         }
@@ -458,7 +458,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     private func downloadOverlay(from url: URL, fileName: String) async throws -> URL {
-        let destinationDirectory = FileManager.default.temporaryDirectory.appending(path: "ScotchV2Overlays")
+        let destinationDirectory = FileManager.default.temporaryDirectory.appending(path: "ScotchOverlays")
         if !fileSystem.fileExists(at: destinationDirectory) {
             try fileSystem.createDirectory(at: destinationDirectory)
         }

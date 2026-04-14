@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "ScotchV2",
+    name: "Scotch",
     platforms: [
         .macOS(.v26)
     ],
@@ -65,18 +65,6 @@ let package = Package(
                     "-Xlinker", "Sources/ScotchApp/Info.plist"
                 ])
             ]
-        ),
-        .testTarget(
-            name: "ScotchDomainTests",
-            dependencies: ["ScotchDomain"]
-        ),
-        .testTarget(
-            name: "ScotchRuntimeTests",
-            dependencies: ["ScotchRuntime", "ScotchDomain", "ScotchInfrastructure"]
-        ),
-        .testTarget(
-            name: "ScotchFeaturesTests",
-            dependencies: ["ScotchFeatures", "ScotchDomain", "ScotchInfrastructure", "ScotchRuntime"]
         )
     ],
     swiftLanguageModes: [.v6]

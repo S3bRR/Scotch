@@ -8,7 +8,7 @@ public final class DefaultNetworkClient: NetworkClient, @unchecked Sendable {
     private let retry: RetryPolicy
 
     public init(
-        userAgent: String = "ScotchV2",
+        userAgent: String = "Scotch",
         defaultRequestTimeout: TimeInterval = 30,
         defaultResourceTimeout: TimeInterval = 600,
         retry: RetryPolicy = .default
@@ -23,7 +23,7 @@ public final class DefaultNetworkClient: NetworkClient, @unchecked Sendable {
     }
 
     /// Test-only initializer that accepts a pre-built `URLSession` (e.g. one wired to a stub URLProtocol).
-    public init(session: URLSession, userAgent: String = "ScotchV2", retry: RetryPolicy = .default) {
+    public init(session: URLSession, userAgent: String = "Scotch", retry: RetryPolicy = .default) {
         self.session = session
         self.userAgent = userAgent
         self.retry = retry

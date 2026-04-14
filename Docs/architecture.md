@@ -1,4 +1,4 @@
-# Scotch V2 Architecture
+# Scotch Architecture
 
 ## Layers
 - `ScotchApp`: executable entry point and scene bootstrapping.
@@ -13,9 +13,9 @@
 - UI never talks directly to process/file APIs.
 
 ## Compatibility strategy
-- Keep bottle metadata shape compatible (`Metadata.plist`), preserving settings and behavior.
+- Keep bottle metadata shape stable (`Metadata.plist`).
 - Preserve backend/env assembly behavior for DXVK, DXMT, D3DMetal, Zink, sync modes, and GPU spoofing keys.
-- Preserve launch behavior via `open -a Wine.app --args start /unix ...` to avoid hidden windows.
+- Launch via `open -a Wine.app --args start /unix ...` so Wine's child processes get a proper foreground activation policy.
 
 ## Performance strategy
 - IO/process work is off main actor.
