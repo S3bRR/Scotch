@@ -8,7 +8,6 @@ public struct BottleDetailView: View {
     private let container: ScotchContainer
     private let bottle: BottleSummary
     @StateObject private var viewModel: BottleDetailViewModel
-    @State private var editableSettings: BottleSettings
     @State private var programLoading = false
     @State private var renamingProgram: ProgramRecord?
     @State private var renameText: String = ""
@@ -22,7 +21,6 @@ public struct BottleDetailView: View {
         self.container = container
         self.bottle = bottle
         _viewModel = StateObject(wrappedValue: BottleDetailViewModel(container: container, bottle: bottle))
-        _editableSettings = State(initialValue: bottle.settings)
     }
 
     public var body: some View {
@@ -123,7 +121,7 @@ public struct BottleDetailView: View {
                 switch stage {
                 case .config:
                     ConfigView(
-                        settings: $editableSettings,
+                        settings: $viewModel.bottle.settings,
                         zinkAvailable: isBackendAvailable(.zink),
                         onSave: saveSettings
                     )
@@ -166,11 +164,9 @@ public struct BottleDetailView: View {
         .disabled(!viewModel.bottle.isAvailable)
         .task {
             await viewModel.refresh()
-            editableSettings = viewModel.bottle.settings
         }
         .onChange(of: bottle) { _, newValue in
-            viewModel.bottle = newValue
-            editableSettings = newValue.settings
+            viewModel.adoptBottle(newValue)
         }
         .sheet(item: $renamingProgram) { program in
             RenamePinSheet(
@@ -243,15 +239,15 @@ public struct BottleDetailView: View {
             .padding(.horizontal, 4)
 
             HStack(spacing: ScotchTheme.Spacing.small) {
-                Image(systemName: backendIcon(for: editableSettings.backend.backend))
+                Image(systemName: backendIcon(for: viewModel.bottle.settings.backend.backend))
                     .font(.title2)
                     .foregroundStyle(ScotchTheme.accent)
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(editableSettings.backend.backend.displayName)
+                    Text(viewModel.bottle.settings.backend.backend.displayName)
                         .font(.body.weight(.medium))
-                    Text(backendDescription(for: editableSettings.backend.backend))
+                    Text(backendDescription(for: viewModel.bottle.settings.backend.backend))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -259,7 +255,7 @@ public struct BottleDetailView: View {
 
                 Spacer()
 
-                Picker("", selection: $editableSettings.backend.backend) {
+                Picker("", selection: $viewModel.bottle.settings.backend.backend) {
                     ForEach(availableBackends, id: \.self) { backend in
                         Text(backend.displayName).tag(backend)
                     }
@@ -267,7 +263,7 @@ public struct BottleDetailView: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: 220)
-                .onChange(of: editableSettings.backend.backend) { _, _ in
+                .onChange(of: viewModel.bottle.settings.backend.backend) { _, _ in
                     saveSettings()
                 }
             }
@@ -304,7 +300,7 @@ public struct BottleDetailView: View {
 
     private func saveSettings() {
         Task {
-            await viewModel.saveSettings(editableSettings)
+            await viewModel.saveSettings(viewModel.bottle.settings)
             await viewModel.refresh()
         }
     }
@@ -377,8 +373,8 @@ public struct BottleDetailView: View {
 
     private var availableBackends: [TranslationBackend] {
         var backends = TranslationBackend.allCases.filter(isBackendAvailable)
-        if !backends.contains(editableSettings.backend.backend) {
-            backends.insert(editableSettings.backend.backend, at: 0)
+        if !backends.contains(viewModel.bottle.settings.backend.backend) {
+            backends.insert(viewModel.bottle.settings.backend.backend, at: 0)
         }
         return backends
     }

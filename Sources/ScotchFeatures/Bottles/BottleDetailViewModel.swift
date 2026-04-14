@@ -14,6 +14,7 @@ public final class BottleDetailViewModel: ObservableObject {
     @Published public var statusMessage: String?
 
     private let container: ScotchContainer
+    private var lastSavedSettings: BottleSettings
     private let currentVersionRegistryKey = #"HKLM\Software\Microsoft\Windows NT\CurrentVersion"#
     private let macDriverRegistryKey = #"HKCU\Software\Wine\Mac Driver"#
     private let desktopRegistryKey = #"HKCU\Control Panel\Desktop"#
@@ -23,6 +24,12 @@ public final class BottleDetailViewModel: ObservableObject {
     public init(container: ScotchContainer, bottle: BottleSummary) {
         self.container = container
         self.bottle = bottle
+        self.lastSavedSettings = bottle.settings
+    }
+
+    public func adoptBottle(_ newBottle: BottleSummary) {
+        bottle = newBottle
+        lastSavedSettings = newBottle.settings
     }
 
     public func refresh() async {
@@ -129,7 +136,7 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     public func saveSettings(_ settings: BottleSettings) async {
-        let previousSettings = bottle.settings
+        let previousSettings = lastSavedSettings
         var stagedBottle = bottle
         stagedBottle.settings = settings
 
@@ -144,6 +151,7 @@ public final class BottleDetailViewModel: ObservableObject {
 
             try await container.bottleRepository.saveSettings(settings, for: bottle.id)
             bottle.settings = settings
+            lastSavedSettings = settings
 
             if compatibilityInputsChanged(from: previousSettings, to: settings) {
                 await container.runtimeService.syncCompatibilityState(for: stagedBottle)
