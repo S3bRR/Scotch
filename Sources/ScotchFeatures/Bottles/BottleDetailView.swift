@@ -36,42 +36,26 @@ public struct BottleDetailView: View {
             .scrollContentBackground(.hidden)
             .bottomBar {
                 HStack(spacing: ScotchTheme.Spacing.small) {
-                    GlassEffectContainer(spacing: 6) {
-                        HStack(spacing: 6) {
-                            Button {
-                                NotificationCenter.default.post(name: .scotchOpenSetup, object: nil)
-                            } label: {
-                                Image(systemName: "wrench.and.screwdriver")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .scotchGlassInteractive(cornerRadius: 8)
-                            .help("Setup")
-
-                            Button {
-                                NotificationCenter.default.post(name: .scotchOpenSettings, object: nil)
-                            } label: {
-                                Image(systemName: "gearshape")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .scotchGlassInteractive(cornerRadius: 8)
-                            .help("Settings")
-
-                            Button {
-                                NotificationCenter.default.post(name: .scotchOpenDiagnostics, object: nil)
-                            } label: {
-                                Image(systemName: "stethoscope")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .scotchGlassInteractive(cornerRadius: 8)
-                            .help("Diagnostics")
-                        }
+                    Button {
+                        NotificationCenter.default.post(name: .scotchOpenSettings, object: nil)
+                    } label: {
+                        Image(systemName: "gearshape")
                     }
+                    .help("Settings")
+
+                    Button {
+                        NotificationCenter.default.post(name: .scotchOpenSetup, object: nil)
+                    } label: {
+                        Image(systemName: "wrench.and.screwdriver")
+                    }
+                    .help("Setup")
+
+                    Button {
+                        NotificationCenter.default.post(name: .scotchOpenDiagnostics, object: nil)
+                    } label: {
+                        Image(systemName: "stethoscope")
+                    }
+                    .help("Diagnostics")
 
                     Spacer()
                     if !viewModel.steamInstalled {
