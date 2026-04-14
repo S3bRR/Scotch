@@ -230,6 +230,55 @@ struct BottleRepositoryProgramSettingsTests {
         #expect(steamPrograms.count == 1)
         #expect(steamPrograms.first?.pinned == true)
     }
+
+    @Test func loadBottlesSkipsCatalogEntriesWithoutMetadata() async throws {
+        let bundleIdentifier = "com.s3brr.Scotch.Tests.\(UUID().uuidString)"
+        let paths = AppPaths(bundleIdentifier: bundleIdentifier)
+        let fileSystem = LocalFileSystem()
+        let plistStore = PlistStore()
+        let logger = DefaultAppLogger(subsystem: bundleIdentifier, category: "BottleRepositoryProgramSettingsTests")
+
+        try? fileSystem.removeItem(at: paths.containerDirectory)
+        defer { try? fileSystem.removeItem(at: paths.containerDirectory) }
+
+        try fileSystem.createDirectory(at: paths.defaultBottlesDirectory)
+
+        // Real bottle: directory + metadata both present.
+        let realBottle = paths.defaultBottlesDirectory.appending(path: "real-bottle")
+        try fileSystem.createDirectory(at: realBottle)
+        var realSettings = BottleSettings()
+        realSettings.info.name = "Real"
+        try await plistStore.write(realSettings, to: realBottle.appending(path: BottleSettings.metadataFileName))
+
+        // Orphan #1: catalog path points at a directory that doesn't exist.
+        let missingDirectory = paths.defaultBottlesDirectory.appending(path: "gone-bottle")
+
+        // Orphan #2: directory exists but no Metadata.plist (partial-creation crash).
+        let partialBottle = paths.defaultBottlesDirectory.appending(path: "partial-bottle")
+        try fileSystem.createDirectory(at: partialBottle)
+
+        let catalog = BottleCatalog(bottlePaths: [
+            realBottle.path(percentEncoded: false),
+            missingDirectory.path(percentEncoded: false),
+            partialBottle.path(percentEncoded: false)
+        ])
+        try await plistStore.write(catalog, to: paths.bottleCatalogURL)
+
+        let repository = BottleRepository(
+            paths: paths,
+            fileSystem: fileSystem,
+            plistStore: plistStore,
+            runtimeService: MockRuntimeService(),
+            winetricksService: MockWinetricksService(),
+            logger: logger,
+            processRunner: DefaultProcessRunner()
+        )
+
+        let loaded = await repository.loadBottles()
+        #expect(loaded.count == 1)
+        #expect(loaded.first?.settings.info.name == "Real")
+        #expect(loaded.contains { $0.settings.info.name == "Bottle" } == false)
+    }
 }
 
 private actor MockRuntimeService: WineRuntimeServiceProtocol {

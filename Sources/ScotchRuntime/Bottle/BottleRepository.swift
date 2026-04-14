@@ -37,29 +37,33 @@ public actor BottleRepository: BottleRepositoryProtocol {
         for rawPath in catalog.bottlePaths {
             let directory = URL(fileURLWithPath: rawPath)
             let metadata = directory.appending(path: BottleSettings.metadataFileName)
-            let available = fileSystem.fileExists(at: metadata)
+
+            // If the metadata file is missing the catalog entry is orphaned
+            // (partial creation, manually deleted folder, moved bottle). Skip it
+            // so it doesn't surface as a phantom "Bottle" with default settings.
+            // The catalog entry stays on disk in case the location is only
+            // temporarily unavailable (e.g., an unmounted external drive).
+            guard fileSystem.fileExists(at: metadata) else {
+                continue
+            }
 
             let settings: BottleSettings
-            if available {
-                if let decoded = try? await plistStore.read(BottleSettings.self, from: metadata) {
-                    settings = decoded
-                } else {
-                    logger.error("Failed to decode metadata for bottle at \(metadata.path(percentEncoded: false)); marking unavailable")
-                    recordMigrationEvent("Corrupted metadata detected at \(metadata.lastPathComponent) in \(directory.lastPathComponent)")
-                    var fallback = BottleSettings()
-                    fallback.info.name = "\(directory.lastPathComponent) (Corrupted Metadata)"
-                    summaries.append(
-                        BottleSummary(
-                            id: BottleID(rawValue: directory.lastPathComponent),
-                            directoryURL: directory,
-                            settings: fallback,
-                            isAvailable: false
-                        )
-                    )
-                    continue
-                }
+            if let decoded = try? await plistStore.read(BottleSettings.self, from: metadata) {
+                settings = decoded
             } else {
-                settings = BottleSettings()
+                logger.error("Failed to decode metadata for bottle at \(metadata.path(percentEncoded: false)); marking unavailable")
+                recordMigrationEvent("Corrupted metadata detected at \(metadata.lastPathComponent) in \(directory.lastPathComponent)")
+                var fallback = BottleSettings()
+                fallback.info.name = "\(directory.lastPathComponent) (Corrupted Metadata)"
+                summaries.append(
+                    BottleSummary(
+                        id: BottleID(rawValue: directory.lastPathComponent),
+                        directoryURL: directory,
+                        settings: fallback,
+                        isAvailable: false
+                    )
+                )
+                continue
             }
 
             summaries.append(
@@ -67,7 +71,7 @@ public actor BottleRepository: BottleRepositoryProtocol {
                     id: BottleID(rawValue: directory.lastPathComponent),
                     directoryURL: directory,
                     settings: settings,
-                    isAvailable: available
+                    isAvailable: true
                 )
             )
         }
@@ -140,13 +144,17 @@ public actor BottleRepository: BottleRepositoryProtocol {
             progress?(overall)
         }
 
+        // Write metadata BEFORE publishing the bottle path to the catalog. If
+        // the app is killed between these steps, a catalog entry pointing at a
+        // directory with no Metadata.plist would surface as a phantom bottle on
+        // next launch.
+        try await plistStore.write(working.settings, to: metadata)
         try await appendBottlePathToCatalog(working.directoryURL.path(percentEncoded: false))
+
         working.isAvailable = true
         working.setupProgress = 1.0
         working.inFlight = false
         progress?(working.setupProgress)
-
-        try await plistStore.write(working.settings, to: metadata)
         return working
     }
 
