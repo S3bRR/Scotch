@@ -22,11 +22,11 @@ Scotch is a native SwiftUI shell around other people's hard work. The app itself
 
 | Component | Project | What it does |
 |---|---|---|
-| Core compatibility layer | **[Wine](https://www.winehq.org/)** (via [Gcenx's macOS builds](https://github.com/Gcenx/macOS_Wine_builds) of Wine Staging 11.6) | Translates Win32 API calls to macOS equivalents. Everything else on this list sits on top of Wine. |
-| DirectX 9/10/11 → Vulkan → Metal | **[DXVK](https://github.com/Gcenx/DXVK-macOS)** (Gcenx's macOS port of [doitsujin/dxvk](https://github.com/doitsujin/dxvk)) + **[MoltenVK](https://github.com/KhronosGroup/MoltenVK)** | Widest compatibility path. Default backend for new bottles. |
-| DirectX 10/11 → Metal (native) | **[DXMT](https://github.com/3Shain/dxmt)** by 3Shain | Native-Metal alternative for D3D11 titles. Better Apple Silicon perf than DXVK for the games it supports. |
-| DirectX 11/12 → Metal (native) | **[D3DMetal](https://developer.apple.com/games/game-porting-toolkit/)** from Apple's Game Porting Toolkit 3 | Apple's own DX11/12 translation layer. Required for DX12 titles. |
-| OpenGL 4.6 → Vulkan → Metal | **[Mesa Zink](https://docs.mesa3d.org/drivers/zink.html)** (Windows build by [pal1000](https://github.com/pal1000/mesa-dist-win)) | Works around macOS 26's OpenGL deprecation by sidestepping Apple's CGL entirely. |
+| Core compatibility layer | **[Wine Staging 11.6](https://www.winehq.org/)** (via [Gcenx's macOS builds](https://github.com/Gcenx/macOS_Wine_builds)) | Translates Win32 API calls to macOS equivalents. Everything else on this list sits on top of Wine. |
+| DirectX 9/10/11 → Vulkan → Metal | **[DXVK 1.10.3](https://github.com/Gcenx/DXVK-macOS)** (Gcenx's macOS port of [doitsujin/dxvk](https://github.com/doitsujin/dxvk)) + **[MoltenVK 1.4.1](https://github.com/KhronosGroup/MoltenVK)** | Widest compatibility path. Default backend for new bottles. |
+| DirectX 10/11 → Metal (native) | **[DXMT 0.74](https://github.com/3Shain/dxmt)** by 3Shain | Native-Metal alternative for D3D11 titles. Better Apple Silicon perf than DXVK for the games it supports. |
+| DirectX 11/12 → Metal (native) | **[D3DMetal 3.0](https://developer.apple.com/games/game-porting-toolkit/)** from Apple's Game Porting Toolkit 3 | Apple's own DX11/12 translation layer. Required for DX12 titles. |
+| OpenGL 4.6 → Vulkan → Metal | **[Mesa Zink 24.3.4](https://docs.mesa3d.org/drivers/zink.html)** (Windows build by [pal1000](https://github.com/pal1000/mesa-dist-win)) | Works around macOS 26's OpenGL deprecation by sidestepping Apple's CGL entirely. |
 | UI framework | **SwiftUI** | Native macOS interface. |
 
 Each translation backend is a separate option in the bottle config picker. You pick one per bottle based on the game's needs.
