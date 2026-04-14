@@ -231,6 +231,101 @@ struct BottleRepositoryProgramSettingsTests {
         #expect(steamPrograms.first?.pinned == true)
     }
 
+    @Test func deleteBottleKillsWineAndRemovesAllFiles() async throws {
+        let bundleIdentifier = "com.s3brr.Scotch.Tests.\(UUID().uuidString)"
+        let paths = AppPaths(bundleIdentifier: bundleIdentifier)
+        let fileSystem = LocalFileSystem()
+        let plistStore = PlistStore()
+        let logger = DefaultAppLogger(subsystem: bundleIdentifier, category: "BottleRepositoryProgramSettingsTests")
+        let runtime = RecordingRuntimeService()
+
+        try? fileSystem.removeItem(at: paths.containerDirectory)
+        defer { try? fileSystem.removeItem(at: paths.containerDirectory) }
+
+        try fileSystem.createDirectory(at: paths.defaultBottlesDirectory)
+        let bottleDirectory = paths.defaultBottlesDirectory.appending(path: "delete-me")
+        try fileSystem.createDirectory(at: bottleDirectory)
+
+        // Nested artifacts we expect to be removed along with the bottle.
+        let driveC = bottleDirectory.appending(path: "drive_c/Program Files/Game")
+        try fileSystem.createDirectory(at: driveC)
+        try Data("binary".utf8).write(to: driveC.appending(path: "game.exe"))
+
+        let programSettings = bottleDirectory.appending(path: "Program Settings")
+        try fileSystem.createDirectory(at: programSettings)
+        try Data().write(to: programSettings.appending(path: "game.exe.plist"))
+
+        try await plistStore.write(
+            BottleSettings(),
+            to: bottleDirectory.appending(path: BottleSettings.metadataFileName)
+        )
+        try await plistStore.write(
+            BottleCatalog(bottlePaths: [bottleDirectory.path(percentEncoded: false)]),
+            to: paths.bottleCatalogURL
+        )
+
+        let repository = BottleRepository(
+            paths: paths,
+            fileSystem: fileSystem,
+            plistStore: plistStore,
+            runtimeService: runtime,
+            winetricksService: MockWinetricksService(),
+            logger: logger,
+            processRunner: DefaultProcessRunner()
+        )
+
+        try await repository.deleteBottle(id: BottleID(rawValue: "delete-me"), removeFiles: true)
+
+        let killed = await runtime.killedBottleIDs
+        #expect(killed == ["delete-me"])
+        #expect(fileSystem.fileExists(at: bottleDirectory) == false)
+        #expect(fileSystem.fileExists(at: driveC) == false)
+        #expect(fileSystem.fileExists(at: programSettings) == false)
+
+        let remaining = await repository.loadBottles()
+        #expect(remaining.contains { $0.id.rawValue == "delete-me" } == false)
+    }
+
+    @Test func deleteBottleWithoutRemovingFilesLeavesFilesAndSkipsKill() async throws {
+        let bundleIdentifier = "com.s3brr.Scotch.Tests.\(UUID().uuidString)"
+        let paths = AppPaths(bundleIdentifier: bundleIdentifier)
+        let fileSystem = LocalFileSystem()
+        let plistStore = PlistStore()
+        let logger = DefaultAppLogger(subsystem: bundleIdentifier, category: "BottleRepositoryProgramSettingsTests")
+        let runtime = RecordingRuntimeService()
+
+        try? fileSystem.removeItem(at: paths.containerDirectory)
+        defer { try? fileSystem.removeItem(at: paths.containerDirectory) }
+
+        try fileSystem.createDirectory(at: paths.defaultBottlesDirectory)
+        let bottleDirectory = paths.defaultBottlesDirectory.appending(path: "keep-me")
+        try fileSystem.createDirectory(at: bottleDirectory)
+        try await plistStore.write(
+            BottleSettings(),
+            to: bottleDirectory.appending(path: BottleSettings.metadataFileName)
+        )
+        try await plistStore.write(
+            BottleCatalog(bottlePaths: [bottleDirectory.path(percentEncoded: false)]),
+            to: paths.bottleCatalogURL
+        )
+
+        let repository = BottleRepository(
+            paths: paths,
+            fileSystem: fileSystem,
+            plistStore: plistStore,
+            runtimeService: runtime,
+            winetricksService: MockWinetricksService(),
+            logger: logger,
+            processRunner: DefaultProcessRunner()
+        )
+
+        try await repository.deleteBottle(id: BottleID(rawValue: "keep-me"), removeFiles: false)
+
+        let killed = await runtime.killedBottleIDs
+        #expect(killed.isEmpty)
+        #expect(fileSystem.fileExists(at: bottleDirectory) == true)
+    }
+
     @Test func loadBottlesSkipsCatalogEntriesWithoutMetadata() async throws {
         let bundleIdentifier = "com.s3brr.Scotch.Tests.\(UUID().uuidString)"
         let paths = AppPaths(bundleIdentifier: bundleIdentifier)
@@ -303,4 +398,24 @@ private actor MockWinetricksService: WinetricksServiceProtocol {
     func parseVerbs() async throws -> [WinetricksCategoryListing] { [] }
     func run(command: String, in bottle: BottleSummary, mode: WinetricksExecutionMode) async throws -> String { "" }
     func installCoreFonts(in bottle: BottleSummary, progress: (@Sendable (Double) -> Void)?) async throws {}
+}
+
+private actor RecordingRuntimeService: WineRuntimeServiceProtocol {
+    private(set) var killedBottleIDs: [String] = []
+    func runProgram(at url: URL, arguments: [String], bottle: BottleSummary, extraEnvironment: [String: String]) async throws {}
+    func runSteam(in bottle: BottleSummary, arguments: [String]) async throws {}
+    func runBatchFile(at url: URL, bottle: BottleSummary, extraEnvironment: [String: String]) async throws {}
+    func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String]) async throws -> String { "" }
+    func runWineServer(arguments: [String], bottle: BottleSummary) async throws -> String { "" }
+    func syncCompatibilityState(for bottle: BottleSummary) async {}
+    func killBottle(_ bottle: BottleSummary) async {
+        killedBottleIDs.append(bottle.id.rawValue)
+    }
+    func latestLogURL(for bottle: BottleSummary) async -> URL? { nil }
+    func makeShellEnvironment(for bottle: BottleSummary) async -> [String: String] { [:] }
+    func generateRunCommand(at url: URL, arguments: [String], bottle: BottleSummary, extraEnvironment: [String: String]) async -> String { "" }
+    func recentLogs(limit: Int) async -> [URL] { [] }
+    func readLog(at url: URL, maxCharacters: Int) async -> String { "" }
+    func listProcesses(in bottle: BottleSummary) async throws -> [BottleProcessInfo] { [] }
+    func killProcess(pid: Int, in bottle: BottleSummary) async throws {}
 }

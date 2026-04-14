@@ -181,8 +181,28 @@ public actor BottleRepository: BottleRepositoryProtocol {
         }
 
         let path = URL(fileURLWithPath: catalog.bottlePaths[index])
-        if removeFiles, fileSystem.fileExists(at: path) {
-            try fileSystem.removeItem(at: path)
+
+        if removeFiles {
+            // Kill any running wine processes bound to this prefix before
+            // touching the directory. Skipping this step leaves wineserver and
+            // game processes alive against files that are being unlinked under
+            // them — they keep running, hold stale state, and can block the
+            // removal outright on macOS if any files are exclusively held.
+            let killTarget = BottleSummary(
+                id: id,
+                directoryURL: path,
+                settings: BottleSettings(),
+                isAvailable: true
+            )
+            await runtimeService.killBottle(killTarget)
+
+            // Brief grace for wineserver to finish its own cleanup. 500 ms is
+            // empirically enough for a quiescent prefix.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            if fileSystem.fileExists(at: path) {
+                try fileSystem.removeItem(at: path)
+            }
         }
 
         catalog.bottlePaths.remove(at: index)
