@@ -94,7 +94,72 @@ fi
 
 if command -v hdiutil >/dev/null 2>&1; then
   DMG_PATH="$OUT_DIR/Scotch.dmg"
-  hdiutil create -volname "Scotch" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG_PATH" >/dev/null
+  STAGING="$OUT_DIR/dmg-staging"
+  RW_DMG="$OUT_DIR/Scotch.rw.dmg"
+  VOLUME_NAME="Scotch"
+
+  # Detach any volume named "Scotch" (or collision-suffixed variants) so the
+  # AppleScript window-layout pass unambiguously targets our new image.
+  for vol in /Volumes/Scotch /Volumes/Scotch\ 1 /Volumes/Scotch\ 2 /Volumes/Scotch\ 3; do
+    if [[ -d "$vol" ]]; then
+      echo "Detaching existing mount: $vol"
+      hdiutil detach "$vol" -force >/dev/null 2>&1 || true
+    fi
+  done
+
+  rm -rf "$STAGING" "$DMG_PATH" "$RW_DMG"
+  mkdir -p "$STAGING"
+  cp -R "$APP_BUNDLE" "$STAGING/"
+  ln -s /Applications "$STAGING/Applications"
+
+  hdiutil create \
+    -srcfolder "$STAGING" \
+    -volname "$VOLUME_NAME" \
+    -fs HFS+ \
+    -format UDRW \
+    -ov \
+    "$RW_DMG" >/dev/null
+
+  # Let macOS auto-mount at /Volumes/<VOLUME_NAME> so Finder's `tell disk "Scotch"`
+  # resolves unambiguously. Passing -mountpoint forces the basename of the mount
+  # path as the Finder-visible name, which breaks the AppleScript lookup.
+  hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen >/dev/null
+  MOUNT_DIR="/Volumes/$VOLUME_NAME"
+
+  # Give Finder a moment to index the mounted volume before scripting it.
+  sleep 2
+
+  osascript <<OSA
+tell application "Finder"
+  tell disk "$VOLUME_NAME"
+    open
+    delay 1
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set the bounds of container window to {400, 120, 1100, 560}
+    set theViewOptions to the icon view options of container window
+    set arrangement of theViewOptions to not arranged
+    set icon size of theViewOptions to 144
+    set text size of theViewOptions to 14
+    delay 1
+    set position of item "Scotch.app" of container window to {180, 220}
+    set position of item "Applications" of container window to {520, 220}
+    update without registering applications
+    delay 2
+    close
+  end tell
+end tell
+OSA
+
+  sync
+  hdiutil detach "$MOUNT_DIR" >/dev/null
+  rmdir "$MOUNT_DIR" 2>/dev/null || true
+
+  hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" >/dev/null
+  rm -f "$RW_DMG"
+  rm -rf "$STAGING"
+
   echo "Created $DMG_PATH"
 else
   echo "hdiutil unavailable; skipped DMG generation"
