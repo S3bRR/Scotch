@@ -35,7 +35,7 @@ struct ScotchCommandLine {
             return listBottles()
         case "create":
             guard arguments.count >= 2 else { return fail("Missing bottle name.") }
-            return createBottle(named: arguments[1])
+            return await createBottle(named: arguments[1])
         case "add":
             guard arguments.count >= 2 else { return fail("Missing bottle path.") }
             return addBottle(path: arguments[1])
@@ -45,10 +45,10 @@ struct ScotchCommandLine {
             return uninstallCommandLink()
         case "remove":
             guard arguments.count >= 2 else { return fail("Missing bottle name.") }
-            return removeBottle(named: arguments[1], deleteFiles: false)
+            return await removeBottle(named: arguments[1], deleteFiles: false)
         case "delete":
             guard arguments.count >= 2 else { return fail("Missing bottle name.") }
-            return removeBottle(named: arguments[1], deleteFiles: true)
+            return await removeBottle(named: arguments[1], deleteFiles: true)
         case "shellenv":
             guard arguments.count >= 2 else { return fail("Missing bottle name.") }
             return printShellEnvironment(for: arguments[1])
@@ -58,6 +58,15 @@ struct ScotchCommandLine {
             let executablePath = arguments[2]
             let executableArguments = Array(arguments.dropFirst(3))
             return await runProgram(in: bottleName, executablePath: executablePath, executableArguments: executableArguments)
+        case "run-path":
+            guard arguments.count >= 3 else { return fail("Usage: ScotchCmd run-path <bottle-path> <exe-path> [args...]") }
+            let bottlePath = arguments[1]
+            let executablePath = arguments[2]
+            let executableArguments = Array(arguments.dropFirst(3))
+            return await runProgram(bottlePath: bottlePath, executablePath: executablePath, executableArguments: executableArguments)
+        case "prepare-path":
+            guard arguments.count >= 2 else { return fail("Usage: ScotchCmd prepare-path <bottle-path>") }
+            return await prepareBottle(path: arguments[1])
         case "help", "--help", "-h":
             printUsage()
             return 0
@@ -108,33 +117,30 @@ struct ScotchCommandLine {
         return 0
     }
 
-    private func createBottle(named name: String) -> Int32 {
+    private func createBottle(named name: String) async -> Int32 {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return fail("Bottle name cannot be empty.")
         }
 
         do {
-            if !FileManager.default.fileExists(atPath: paths.defaultBottlesDirectory.path(percentEncoded: false)) {
-                try FileManager.default.createDirectory(at: paths.defaultBottlesDirectory, withIntermediateDirectories: true)
+            let services = makeServices()
+            let summary = try await services.repository.prepareBottle(
+                name: name,
+                windowsVersion: .win10,
+                containerURL: paths.defaultBottlesDirectory
+            )
+            do {
+                let configured = try await services.repository.setupWineEnvironment(summary, progress: nil)
+                let final = try await services.repository.installBottleCoreFonts(configured, progress: nil)
+                print("Created bottle '\(name)' at \(final.directoryURL.path(percentEncoded: false)).")
+                return 0
+            } catch {
+                try? await services.repository.deleteBottle(id: summary.id, removeFiles: true)
+                if services.fileSystem.fileExists(at: summary.directoryURL) {
+                    try? services.fileSystem.removeItem(at: summary.directoryURL)
+                }
+                throw error
             }
-
-            let bottleURL = paths.defaultBottlesDirectory.appending(path: UUID().uuidString)
-            try FileManager.default.createDirectory(at: bottleURL, withIntermediateDirectories: true)
-
-            var settings = BottleSettings()
-            settings.info.name = name
-            let metadataData = try encoder.encode(settings)
-            try metadataData.write(to: bottleURL.appending(path: BottleSettings.metadataFileName))
-
-            var catalog = loadCatalog()
-            catalog.bottlePaths.append(bottleURL.path(percentEncoded: false))
-            guard saveCatalog(catalog) else {
-                try? FileManager.default.removeItem(at: bottleURL)
-                return fail("Failed to persist bottle catalog.")
-            }
-
-            print("Created bottle '\(name)' at \(bottleURL.path(percentEncoded: false)).")
-            return 0
         } catch {
             return fail("Failed to create bottle: \(error.localizedDescription)")
         }
@@ -176,24 +182,17 @@ struct ScotchCommandLine {
         }
     }
 
-    private func removeBottle(named name: String, deleteFiles: Bool) -> Int32 {
-        var catalog = loadCatalog()
-        guard let index = indexOfBottle(named: name, in: catalog) else {
+    private func removeBottle(named name: String, deleteFiles: Bool) async -> Int32 {
+        guard let bottle = findBottle(named: name) else {
             return fail("Bottle '\(name)' not found.")
         }
 
-        let path = catalog.bottlePaths[index]
-        catalog.bottlePaths.remove(at: index)
-        guard saveCatalog(catalog) else {
-            return fail("Failed to persist bottle catalog.")
+        do {
+            try await makeServices().repository.deleteBottle(id: bottle.id, removeFiles: deleteFiles)
+        } catch {
+            return fail("Failed to remove bottle: \(error.localizedDescription)")
         }
-
         if deleteFiles {
-            do {
-                try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
-            } catch {
-                return fail("Removed from catalog, but failed to delete files: \(error.localizedDescription)")
-            }
             print("Deleted bottle '\(name)'.")
         } else {
             print("Removed bottle '\(name)' from catalog.")
@@ -209,6 +208,7 @@ struct ScotchCommandLine {
         let assembler = EnvironmentAssembler(paths: paths)
         let environment = assembler.makeShellEnvironment(bottle: bottle)
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
+            guard key.isShellEnvironmentKey else { continue }
             print("export \(key)=\(shellQuoted(value))")
         }
         print("alias wine64='wine'")
@@ -219,32 +219,48 @@ struct ScotchCommandLine {
         guard let bottle = findBottle(named: bottleName) else {
             return fail("Bottle '\(bottleName)' not found.")
         }
+        return await runProgram(bottle: bottle, executablePath: executablePath, executableArguments: executableArguments)
+    }
 
+    private func runProgram(bottlePath: String, executablePath: String, executableArguments: [String]) async -> Int32 {
+        guard let bottle = loadBottle(at: URL(fileURLWithPath: bottlePath)) else {
+            return fail("Bottle at '\(bottlePath)' not found.")
+        }
+        return await runProgram(bottle: bottle, executablePath: executablePath, executableArguments: executableArguments)
+    }
+
+    private func runProgram(bottle: BottleSummary, executablePath: String, executableArguments: [String]) async -> Int32 {
         let executableURL = URL(fileURLWithPath: executablePath)
-        let assembler = EnvironmentAssembler(paths: paths)
-        let environment = assembler.makeWineEnvironment(bottle: bottle)
-
-        let spec = ProcessSpecification(
-            executableURL: URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: [
-                "-a",
-                paths.wineBundleURL.path(percentEncoded: false),
-                "--args",
-                "start",
-                "/unix",
-                executableURL.path(percentEncoded: false)
-            ] + executableArguments,
-            environment: environment,
-            displayName: "scotch run"
-        )
-
         do {
-            _ = try await processRunner.captureProcess(spec, outputFileHandle: nil)
+            let runtimeService = makeServices().runtimeService
+            if executableURL.pathExtension.lowercased() == "bat" {
+                try await runtimeService.runBatchFile(at: executableURL, bottle: bottle, extraEnvironment: [:])
+            } else {
+                try await runtimeService.runProgram(
+                    at: executableURL,
+                    arguments: executableArguments,
+                    bottle: bottle,
+                    extraEnvironment: [:]
+                )
+            }
             return 0
         } catch let ProcessRunnerError.nonZeroExit(_, status, _) {
             return status
         } catch {
             return fail("Failed to run executable: \(error.localizedDescription)")
+        }
+    }
+
+    private func prepareBottle(path: String) async -> Int32 {
+        guard let bottle = loadBottle(at: URL(fileURLWithPath: path)) else {
+            return fail("Bottle at '\(path)' not found.")
+        }
+
+        do {
+            try await makeServices().runtimeService.prepareBottleForLaunch(bottle)
+            return 0
+        } catch {
+            return fail("Failed to prepare bottle: \(error.localizedDescription)")
         }
     }
 
@@ -305,19 +321,54 @@ struct ScotchCommandLine {
         loadBottles().first { $0.settings.info.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
-    private func indexOfBottle(named name: String, in catalog: BottleCatalog) -> Int? {
-        for (index, rawPath) in catalog.bottlePaths.enumerated() {
-            let directory = URL(fileURLWithPath: rawPath)
-            let metadata = directory.appending(path: BottleSettings.metadataFileName)
-            guard let data = try? Data(contentsOf: metadata),
-                  let settings = try? decoder.decode(BottleSettings.self, from: data) else {
-                continue
-            }
-            if settings.info.name.caseInsensitiveCompare(name) == .orderedSame {
-                return index
-            }
+    private func loadBottle(at directoryURL: URL) -> BottleSummary? {
+        let metadata = directoryURL.appending(path: BottleSettings.metadataFileName)
+        guard let data = try? Data(contentsOf: metadata),
+              let settings = try? decoder.decode(BottleSettings.self, from: data) else {
+            return nil
         }
-        return nil
+        return BottleSummary(
+            id: BottleID(rawValue: directoryURL.lastPathComponent),
+            directoryURL: directoryURL,
+            settings: settings,
+            isAvailable: true
+        )
+    }
+
+    private func makeServices() -> (
+        fileSystem: LocalFileSystem,
+        runtimeService: WineRuntimeService,
+        repository: BottleRepository
+    ) {
+        let fileSystem = LocalFileSystem()
+        let plistStore = PlistStore()
+        let logger = DefaultAppLogger(subsystem: paths.bundleIdentifier, category: "ScotchCmd")
+        let logStore = LogStore(logsDirectory: paths.logsDirectory)
+        let environmentAssembler = EnvironmentAssembler(paths: paths)
+        let runtimeService = WineRuntimeService(
+            paths: paths,
+            processRunner: processRunner,
+            fileSystem: fileSystem,
+            logger: logger,
+            logStore: logStore,
+            envAssembler: environmentAssembler
+        )
+        let winetricksService = WinetricksService(
+            paths: paths,
+            fileSystem: fileSystem,
+            logger: logger,
+            processRunner: processRunner
+        )
+        let repository = BottleRepository(
+            paths: paths,
+            fileSystem: fileSystem,
+            plistStore: plistStore,
+            runtimeService: runtimeService,
+            winetricksService: winetricksService,
+            logger: logger,
+            processRunner: processRunner
+        )
+        return (fileSystem, runtimeService, repository)
     }
 
     private func fail(_ message: String) -> Int32 {
@@ -338,11 +389,13 @@ struct ScotchCommandLine {
               ScotchCmd delete <bottle-name>
               ScotchCmd shellenv <bottle-name>
               ScotchCmd run <bottle-name> <exe-path> [args...]
+              ScotchCmd run-path <bottle-path> <exe-path> [args...]
+              ScotchCmd prepare-path <bottle-path>
             """
         )
     }
 
     private func shellQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+        value.shellQuoted
     }
 }

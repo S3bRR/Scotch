@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import ScotchDomain
 import ScotchInfrastructure
 
@@ -451,6 +452,19 @@ public actor BottleRepository: BottleRepositoryProtocol {
             return decoded
         }
 
+        let legacyURL = legacyProgramSettingsURL(for: executableURL, bottleDirectory: bottleDirectory)
+        if let decoded = try? await plistStore.read(ProgramSettings.self, from: legacyURL) {
+            do {
+                if !fileSystem.fileExists(at: settingsURL.deletingLastPathComponent()) {
+                    try fileSystem.createDirectory(at: settingsURL.deletingLastPathComponent())
+                }
+                try await plistStore.write(decoded, to: settingsURL)
+            } catch {
+                logger.warning("Failed to migrate program settings to \(settingsURL.path(percentEncoded: false)): \(error.localizedDescription)")
+            }
+            return decoded
+        }
+
         let defaults = ProgramSettings()
         do {
             if !fileSystem.fileExists(at: settingsURL.deletingLastPathComponent()) {
@@ -464,10 +478,37 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     private func programSettingsURL(for executableURL: URL, bottleDirectory: URL) -> URL {
+        let fileName = Self.programSettingsFileName(forExecutablePath: executableURL.path(percentEncoded: false))
+
+        return bottleDirectory
+            .appending(path: "Program Settings")
+            .appending(path: fileName)
+            .appendingPathExtension("plist")
+    }
+
+    static func programSettingsFileName(forExecutablePath executablePath: String) -> String {
+        let path = executablePath.lowercased()
+        let digest = SHA256.hash(data: Data(path.utf8))
+        let hash = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        let baseName = sanitizedFileName(URL(fileURLWithPath: executablePath).deletingPathExtension().lastPathComponent)
+
+        return "\(baseName)-\(hash)"
+    }
+
+    private func legacyProgramSettingsURL(for executableURL: URL, bottleDirectory: URL) -> URL {
         bottleDirectory
             .appending(path: "Program Settings")
             .appending(path: executableURL.lastPathComponent)
             .appendingPathExtension("plist")
+    }
+
+    private static func sanitizedFileName(_ raw: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_ "))
+        let scalars = raw.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let value = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "program" : value
     }
 
     private func scanStartMenuPrograms(in bottleDirectory: URL) -> [URL] {
@@ -497,6 +538,7 @@ public actor BottleRepository: BottleRepositoryProtocol {
             while let item = enumerator.nextObject() as? URL {
                 guard item.pathExtension.lowercased() == "lnk" else { continue }
                 guard let programURL = ShellLinkParser.executableURL(from: item, bottleDirectory: bottleDirectory) else { continue }
+                guard fileSystem.fileExists(at: programURL) else { continue }
                 let normalized = programURL.path(percentEncoded: false).lowercased()
                 if seen.insert(normalized).inserted {
                     discovered.append(programURL)

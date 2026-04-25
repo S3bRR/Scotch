@@ -81,54 +81,83 @@ public struct BitmapInfoHeader: Hashable {
         self.colorFormat = ColorFormat(rawValue: bitCount) ?? .unknown
     }
 
-    func renderBitmap(handle: FileHandle, offset: UInt64) -> NSImage? {
+    func renderBitmap(handle: FileHandle, offset: UInt64, dataEnd: UInt64) -> NSImage? {
+        guard width > 0,
+              height > 0,
+              height % 2 == 0,
+              width <= 4096,
+              height / 2 <= 4096,
+              planes == 1,
+              compression == .rgb else {
+            return nil
+        }
+
+        let pixelWidth = Int(width)
+        let pixelHeight = Int(height / 2)
+        let bitsPerPixel = Int(bitCount)
+        guard let bytesPerPixel = bytesPerPixel(for: colorFormat) else {
+            return nil
+        }
+
         var offset = offset
-        let colorTable = buildColorTable(offset: &offset, handle: handle)
+        guard let colorTable = buildColorTable(offset: &offset, handle: handle, dataEnd: dataEnd) else {
+            return nil
+        }
 
         var pixels: [ColorQuad] = []
+        pixels.reserveCapacity(pixelWidth * pixelHeight)
 
-        for _ in 0..<Int(height / 2) {
+        let rowStride = ((pixelWidth * bitsPerPixel + 31) / 32) * 4
+        let pixelDataStart = offset
+
+        for rowIndex in 0..<pixelHeight {
             var pixelRow: [ColorQuad] = []
+            pixelRow.reserveCapacity(pixelWidth)
+            let rowOffset = pixelDataStart + UInt64(rowIndex * rowStride)
+            var cursor = rowOffset
 
-            for _ in 0..<width {
+            for _ in 0..<pixelWidth {
+                guard cursor + UInt64(bytesPerPixel) <= dataEnd else {
+                    return nil
+                }
                 switch colorFormat {
                 case .indexed1, .indexed2, .indexed4:
-                    break
+                    return nil
                 case .indexed8:
-                    let index = Int(handle.extract(UInt8.self, offset: offset) ?? 0)
+                    let index = Int(handle.extract(UInt8.self, offset: cursor) ?? 0)
                     if index >= colorTable.count {
                         pixelRow.append(ColorQuad(red: 0, green: 0, blue: 0, alpha: 0))
                     } else {
                         pixelRow.append(colorTable[Int(index)])
                     }
-                    offset += 1
+                    cursor += 1
                 case .sampled16:
-                    let sample = handle.extract(UInt16.self, offset: offset) ?? 0
+                    let sample = handle.extract(UInt16.self, offset: cursor) ?? 0
                     let red = sample & 0x001F
                     let green = (sample & 0x03E0) >> 5
                     let blue = (sample & 0x7C00) >> 10
-                    pixelRow.append(ColorQuad(red: UInt8(red), green: UInt8(green), blue: UInt8(blue), alpha: 1))
-                    offset += 2
+                    pixelRow.append(ColorQuad(red: UInt8(red << 3), green: UInt8(green << 3), blue: UInt8(blue << 3), alpha: 255))
+                    cursor += 2
                 case .sampled24:
-                    let blue = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
-                    let green = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
-                    let red = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
-                    pixelRow.append(ColorQuad(red: red, green: green, blue: blue, alpha: 1))
+                    let blue = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
+                    let green = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
+                    let red = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
+                    pixelRow.append(ColorQuad(red: red, green: green, blue: blue, alpha: 255))
                 case .sampled32:
-                    let blue = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
-                    let green = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
-                    let red = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
-                    let alpha = handle.extract(UInt8.self, offset: offset) ?? 0
-                    offset += 1
+                    let blue = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
+                    let green = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
+                    let red = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
+                    let alpha = handle.extract(UInt8.self, offset: cursor) ?? 0
+                    cursor += 1
                     pixelRow.append(ColorQuad(red: red, green: green, blue: blue, alpha: alpha))
                 case .unknown:
-                    break
+                    return nil
                 }
             }
 
@@ -139,13 +168,44 @@ public struct BitmapInfoHeader: Hashable {
             }
         }
 
-        return constructImage(pixels: pixels)
+        return constructImage(pixels: pixels, width: pixelWidth, height: pixelHeight)
     }
 
-    private func buildColorTable(offset: inout UInt64, handle: FileHandle) -> [ColorQuad] {
-        var colorTable: [ColorQuad] = []
+    private func bytesPerPixel(for format: ColorFormat) -> Int? {
+        switch format {
+        case .indexed8:
+            1
+        case .sampled16:
+            2
+        case .sampled24:
+            3
+        case .sampled32:
+            4
+        case .indexed1, .indexed2, .indexed4, .unknown:
+            nil
+        }
+    }
 
-        for _ in 0..<clrUsed {
+    private func buildColorTable(offset: inout UInt64, handle: FileHandle, dataEnd: UInt64) -> [ColorQuad]? {
+        var colorTable: [ColorQuad] = []
+        let colorCount: UInt32
+
+        if clrUsed > 0 {
+            colorCount = clrUsed
+        } else if colorFormat == .indexed8 {
+            colorCount = 256
+        } else {
+            colorCount = 0
+        }
+
+        guard colorCount <= 256 else {
+            return nil
+        }
+
+        for _ in 0..<colorCount {
+            guard offset + 4 <= dataEnd else {
+                return nil
+            }
             let blue = handle.extract(UInt8.self, offset: offset) ?? 0
             offset += 1
             let green = handle.extract(UInt8.self, offset: offset) ?? 0
@@ -166,7 +226,7 @@ public struct BitmapInfoHeader: Hashable {
         return colorTable
     }
 
-    private func constructImage(pixels: [ColorQuad]) -> NSImage? {
+    private func constructImage(pixels: [ColorQuad], width: Int, height: Int) -> NSImage? {
         guard !pixels.isEmpty else { return nil }
 
         var pixels = pixels
@@ -174,16 +234,20 @@ public struct BitmapInfoHeader: Hashable {
         let quadStride = MemoryLayout<ColorQuad>.stride
         let byteCount = pixels.count * quadStride
 
+        guard pixels.count == width * height else {
+            return nil
+        }
+
         guard let providerRef = CGDataProvider(data: Data(bytes: &pixels, count: byteCount) as CFData) else {
             return nil
         }
 
         guard let cgImg = CGImage(
-            width: Int(width),
-            height: Int(height / 2),
+            width: width,
+            height: height,
             bitsPerComponent: 8,
             bitsPerPixel: 32,
-            bytesPerRow: Int(width) * quadStride,
+            bytesPerRow: width * quadStride,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: bitmapInfo,
             provider: providerRef,

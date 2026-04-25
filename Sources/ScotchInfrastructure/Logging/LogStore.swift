@@ -1,4 +1,5 @@
 import Foundation
+import ScotchDomain
 
 public struct LogDestination: Sendable {
     public let fileHandle: FileHandle
@@ -17,12 +18,19 @@ public actor LogStore {
         self.logsDirectory = logsDirectory
     }
 
-    public func createLogFile() throws -> LogDestination {
+    public func createLogFile(bottleID: BottleID? = nil) throws -> LogDestination {
         if !FileManager.default.fileExists(atPath: logsDirectory.path(percentEncoded: false)) {
             try FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
         }
 
-        let fileURL = logsDirectory.appending(path: Date.now.ISO8601Format()).appendingPathExtension("log")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let bottleComponent = bottleID.map { ".\($0.rawValue)" } ?? ""
+        let fileURL = logsDirectory
+            .appending(path: "\(timestamp)\(bottleComponent).\(UUID().uuidString)")
+            .appendingPathExtension("log")
         try "".write(to: fileURL, atomically: true, encoding: .utf8)
         let handle = try FileHandle(forWritingTo: fileURL)
         return LogDestination(fileHandle: handle, fileURL: fileURL)
@@ -44,6 +52,13 @@ public actor LogStore {
                 let rightDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 return leftDate > rightDate
             }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    public func recentLogs(for bottleID: BottleID, limit: Int = 30) -> [URL] {
+        recentLogs(limit: 500)
+            .filter { $0.lastPathComponent.contains(".\(bottleID.rawValue).") }
             .prefix(limit)
             .map { $0 }
     }

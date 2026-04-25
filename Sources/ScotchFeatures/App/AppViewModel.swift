@@ -25,6 +25,7 @@ public final class AppViewModel: ObservableObject {
     @Published public var isBusy: Bool = false
     @Published public var toastMessage: String?
     @Published public var overlayDrifts: [OverlayDrift] = []
+    @Published public var runtimeUpdateVersion: AppVersion?
 
     public let container: ScotchContainer
 
@@ -38,8 +39,11 @@ public final class AppViewModel: ObservableObject {
         appSettings = await container.settingsStore.loadSettings()
         runtimeManifest = await container.runtimeInstaller.currentManifest()
         if appSettings.checkRuntimeUpdates {
+            let update = await container.runtimeInstaller.shouldUpdateRuntime()
+            runtimeUpdateVersion = update.0 ? update.1 : nil
             overlayDrifts = await container.runtimeInstaller.overlayDrifts()
         } else {
+            runtimeUpdateVersion = nil
             overlayDrifts = []
         }
         await container.logStore.pruneLogs(olderThan: 7)
@@ -250,6 +254,7 @@ public final class AppViewModel: ObservableObject {
             setupStage = .installingRuntime
             let (manifest, _) = try await container.runtimeInstaller.installAll(from: archives)
             runtimeManifest = manifest
+            runtimeUpdateVersion = nil
             overlayDrifts = await container.runtimeInstaller.overlayDrifts()
             showSetupSheet = false
             setupStage = .ready

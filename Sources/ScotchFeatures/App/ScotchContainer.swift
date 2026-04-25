@@ -120,8 +120,51 @@ public final class ScotchContainer: Sendable {
         guard settings.killProcessesOnTerminate else { return }
         let bottles = await bottleRepository.loadBottles()
         for bottle in bottles {
-            if Date() >= deadline { return }
-            await runtimeService.killBottle(bottle)
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return }
+            let killTask = Task {
+                await runtimeService.killBottle(bottle, timeout: min(remaining, 1.0))
+            }
+            await Self.waitForKillTask(killTask, timeout: remaining)
         }
+    }
+
+    private static func waitForKillTask(_ task: Task<Void, Never>, timeout: TimeInterval) async {
+        guard timeout > 0 else {
+            task.cancel()
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            let gate = OneShotContinuation(continuation)
+
+            Task {
+                await task.value
+                gate.resume()
+            }
+
+            Task {
+                try? await Task.sleep(for: .milliseconds(Int((timeout * 1000).rounded(.up))))
+                task.cancel()
+                gate.resume()
+            }
+        }
+    }
+}
+
+private final class OneShotContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume() {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume()
     }
 }

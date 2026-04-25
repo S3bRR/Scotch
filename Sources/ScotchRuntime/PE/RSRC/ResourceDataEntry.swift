@@ -21,10 +21,15 @@ public struct ResourceDataEntry: Hashable, Equatable {
     public func resolveRVA(sections: [PEFile.Section]) -> UInt32? {
         sections
             .first { section in
-                section.virtualAddress <= dataRVA && dataRVA < (section.virtualAddress + section.virtualSize)
+                let mappedSize = max(section.virtualSize, section.sizeOfRawData)
+                let (sectionEnd, overflow) = section.virtualAddress.addingReportingOverflow(mappedSize)
+                return !overflow && section.virtualAddress <= dataRVA && dataRVA < sectionEnd
             }
             .map { section in
-                section.pointerToRawData + (dataRVA - section.virtualAddress)
+                let delta = dataRVA - section.virtualAddress
+                let (resolved, overflow) = section.pointerToRawData.addingReportingOverflow(delta)
+                return overflow ? nil : resolved
             }
+            .flatMap { $0 }
     }
 }

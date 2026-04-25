@@ -8,6 +8,8 @@ private enum RegistryValueType: String {
 }
 
 public actor WineRuntimeService: WineRuntimeServiceProtocol {
+    private static let defaultKillTimeout: TimeInterval = 3
+
     private let paths: AppPaths
     private let processRunner: ProcessRunner
     private let fileSystem: LocalFileSystem
@@ -39,36 +41,14 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         bottle: BottleSummary,
         extraEnvironment: [String: String]
     ) async throws {
-        try ensureRuntimeReady()
-        try applyBackendDLLs(for: bottle)
-        try writeDXVKConfigIfNeeded(for: bottle)
-        await syncCompatibilityRegistry(for: bottle)
+        try await prepareBottleForLaunch(bottle)
 
-        let environment = envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment)
-        let logDestination = try await logStore.createLogFile()
-        latestLogByBottleID[bottle.id] = logDestination.fileURL
-        logDestination.fileHandle.writeLogHeader(appName: "Scotch", bundleIdentifier: paths.bundleIdentifier)
-        logDestination.fileHandle.writeBottleInfo(
-            name: bottle.settings.info.name,
-            path: bottle.directoryURL.path(percentEncoded: false),
-            backend: bottle.settings.backend.backend.displayName
-        )
-
-        let openSpecification = ProcessSpecification(
-            executableURL: URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: [
-                "-a",
-                paths.wineBundleURL.path(percentEncoded: false),
-                "--args",
-                "start",
-                "/unix",
-                url.path(percentEncoded: false)
-            ] + arguments,
-            environment: environment,
+        try await runWineBundle(
+            arguments: ["start", "/unix", url.path(percentEncoded: false)] + arguments,
+            bottle: bottle,
+            extraEnvironment: extraEnvironment,
             displayName: url.lastPathComponent
         )
-
-        _ = try await processRunner.captureProcess(openSpecification, outputFileHandle: logDestination.fileHandle)
     }
 
     public func runSteam(in bottle: BottleSummary, arguments: [String] = []) async throws {
@@ -83,11 +63,25 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         bottle: BottleSummary,
         extraEnvironment: [String: String]
     ) async throws {
-        _ = try await runWine(arguments: ["cmd", "/c", url.path(percentEncoded: false)], bottle: bottle, environment: extraEnvironment)
+        try await prepareBottleForLaunch(bottle)
+        try await runWineBundle(
+            arguments: ["cmd", "/c", url.path(percentEncoded: false)],
+            bottle: bottle,
+            extraEnvironment: extraEnvironment,
+            displayName: url.lastPathComponent
+        )
+    }
+
+    public func prepareBottleForLaunch(_ bottle: BottleSummary) async throws {
+        try ensureRuntimeReady()
+        try applyBackendDLLs(for: bottle)
+        try writeDXVKConfigIfNeeded(for: bottle)
+        await syncCompatibilityRegistry(for: bottle)
     }
 
     public func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String]) async throws -> String {
-        let logDestination = try await logStore.createLogFile()
+        let logDestination = try await logStore.createLogFile(bottleID: bottle?.id)
+        defer { try? logDestination.fileHandle.close() }
         logDestination.fileHandle.writeLogHeader(appName: "Scotch", bundleIdentifier: paths.bundleIdentifier)
 
         var processEnvironment = environment
@@ -112,14 +106,20 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func runWineServer(arguments: [String], bottle: BottleSummary) async throws -> String {
-        let logDestination = try await logStore.createLogFile()
+        try await runWineServerInternal(arguments: arguments, bottle: bottle, timeout: nil)
+    }
+
+    private func runWineServerInternal(arguments: [String], bottle: BottleSummary, timeout: TimeInterval?) async throws -> String {
+        let logDestination = try await logStore.createLogFile(bottleID: bottle.id)
+        defer { try? logDestination.fileHandle.close() }
         latestLogByBottleID[bottle.id] = logDestination.fileURL
 
         let specification = ProcessSpecification(
             executableURL: paths.wineServerBinaryURL,
             arguments: arguments,
             environment: envAssembler.makeWineServerEnvironment(bottle: bottle),
-            displayName: "wineserver"
+            displayName: "wineserver",
+            timeout: timeout
         )
 
         return try await processRunner.captureProcess(specification, outputFileHandle: logDestination.fileHandle)
@@ -134,9 +134,13 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         await syncCompatibilityRegistry(for: bottle)
     }
 
-    public func killBottle(_ bottle: BottleSummary) async {
+    public func killBottle(_ bottle: BottleSummary, timeout: TimeInterval? = nil) async {
         do {
-            _ = try await runWineServer(arguments: ["-k"], bottle: bottle)
+            _ = try await runWineServerInternal(
+                arguments: ["-k"],
+                bottle: bottle,
+                timeout: timeout ?? Self.defaultKillTimeout
+            )
         } catch {
             logger.warning("Failed to kill bottle \(bottle.settings.info.name): \(error.localizedDescription)")
         }
@@ -146,7 +150,7 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         if let cached = latestLogByBottleID[bottle.id] {
             return cached
         }
-        return await logStore.recentLogs(limit: 20).first
+        return await logStore.recentLogs(for: bottle.id, limit: 1).first
     }
 
     public func recentLogs(limit: Int) async -> [URL] {
@@ -168,17 +172,74 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         extraEnvironment: [String: String]
     ) async -> String {
         let environment = envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment)
-        var command = "\(paths.wineBinaryURL.shellEscapedPath) start /unix \(url.shellEscapedPath)"
+        var command = "/usr/bin/open -n -a \(paths.wineBundleURL.shellEscapedPath) --args start /unix \(url.shellEscapedPath)"
 
         if !arguments.isEmpty {
             let escapedArguments = arguments.map { $0.shellEscaped }.joined(separator: " ")
             command += " \(escapedArguments)"
         }
 
-        for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
-            command = "\(key)=\"\(value)\" " + command
+        let assignments = environment
+            .sorted(by: { $0.key < $1.key })
+            .compactMap { pair -> String? in
+                let key = pair.key
+                let value = pair.value
+                guard key.isShellEnvironmentKey else { return nil }
+                return "\(key)=\(value.shellQuoted)"
+            }
+        if !assignments.isEmpty {
+            command = assignments.joined(separator: " ") + " " + command
+        }
+
+        if let commandLineToolURL = bundledCommandLineToolURL() {
+            let prepare = "\(commandLineToolURL.shellEscapedPath) prepare-path \(bottle.directoryURL.shellEscapedPath)"
+            command = "\(prepare) && \(command)"
         }
         return command
+    }
+
+    private func runWineBundle(
+        arguments: [String],
+        bottle: BottleSummary,
+        extraEnvironment: [String: String],
+        displayName: String
+    ) async throws {
+        let logDestination = try await logStore.createLogFile(bottleID: bottle.id)
+        defer { try? logDestination.fileHandle.close() }
+        latestLogByBottleID[bottle.id] = logDestination.fileURL
+        logDestination.fileHandle.writeLogHeader(appName: "Scotch", bundleIdentifier: paths.bundleIdentifier)
+        logDestination.fileHandle.writeBottleInfo(
+            name: bottle.settings.info.name,
+            path: bottle.directoryURL.path(percentEncoded: false),
+            backend: bottle.settings.backend.backend.displayName
+        )
+
+        let specification = wineBundleSpecification(
+            arguments: arguments,
+            bottle: bottle,
+            extraEnvironment: extraEnvironment,
+            displayName: displayName
+        )
+        _ = try await processRunner.captureProcess(specification, outputFileHandle: logDestination.fileHandle)
+    }
+
+    private func wineBundleSpecification(
+        arguments: [String],
+        bottle: BottleSummary,
+        extraEnvironment: [String: String],
+        displayName: String
+    ) -> ProcessSpecification {
+        ProcessSpecification(
+            executableURL: URL(fileURLWithPath: "/usr/bin/open"),
+            arguments: [
+                "-n",
+                "-a",
+                paths.wineBundleURL.path(percentEncoded: false),
+                "--args"
+            ] + arguments,
+            environment: envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment),
+            displayName: displayName
+        )
     }
 
     public func listProcesses(in bottle: BottleSummary) async throws -> [BottleProcessInfo] {
@@ -196,6 +257,25 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         }
         if !fileSystem.fileExists(at: paths.wineBundleURL) {
             throw RuntimeInstallerError.installFailed("Wine.app bundle missing")
+        }
+    }
+
+    private func bundledCommandLineToolURL() -> URL? {
+        guard let executableURL = Bundle.main.executableURL else {
+            return nil
+        }
+
+        let candidates = [
+            executableURL.deletingLastPathComponent().appending(path: "ScotchCmd"),
+            executableURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appending(path: "Helpers/ScotchCmd"),
+            URL(fileURLWithPath: "/Applications/Scotch.app/Contents/MacOS/ScotchCmd")
+        ]
+
+        return candidates.first {
+            FileManager.default.isExecutableFile(atPath: $0.path(percentEncoded: false))
         }
     }
 
@@ -317,10 +397,11 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     private func syncCompatibilityRegistry(for bottle: BottleSummary) async {
         let zinkActive = bottle.settings.backend.backend == .zink || bottle.settings.backend.glZinkEnabled
         let steamBuiltin = bottle.settings.backend.steamBuiltinOpenGL && zinkActive
+        var failures: [String] = []
 
-        do {
-            if zinkActive {
-                for key in ["opengl32", "libgallium_wgl", "libglapi"] {
+        if zinkActive {
+            for key in ["opengl32", "libgallium_wgl", "libglapi"] {
+                if let failure = await registryResult("set \(key) override", operation: {
                     try await addRegistryValue(
                         bottle: bottle,
                         key: #"HKCU\Software\Wine\DllOverrides"#,
@@ -328,18 +409,26 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
                         type: .string,
                         value: "native,builtin"
                     )
+                }) {
+                    failures.append(failure)
                 }
-            } else {
-                for key in ["opengl32", "libgallium_wgl", "libglapi"] {
+            }
+        } else {
+            for key in ["opengl32", "libgallium_wgl", "libglapi"] {
+                if let failure = await registryResult("delete \(key) override", operation: {
                     try await deleteRegistryValue(
                         bottle: bottle,
                         key: #"HKCU\Software\Wine\DllOverrides"#,
                         name: key
                     )
+                }) {
+                    failures.append(failure)
                 }
             }
+        }
 
-            if steamBuiltin {
+        if steamBuiltin {
+            if let failure = await registryResult("set Steam OpenGL override", operation: {
                 try await addRegistryValue(
                     bottle: bottle,
                     key: #"HKCU\Software\Wine\AppDefaults\steam.exe\DllOverrides"#,
@@ -347,15 +436,23 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
                     type: .string,
                     value: "builtin"
                 )
-            } else {
+            }) {
+                failures.append(failure)
+            }
+        } else {
+            if let failure = await registryResult("delete Steam OpenGL override", operation: {
                 try await deleteRegistryValue(
                     bottle: bottle,
                     key: #"HKCU\Software\Wine\AppDefaults\steam.exe\DllOverrides"#,
                     name: "opengl32"
                 )
+            }) {
+                failures.append(failure)
             }
+        }
 
-            if let identity = bottle.settings.resolvedGPUIdentity() {
+        if let identity = bottle.settings.resolvedGPUIdentity() {
+            if let failure = await registryResult("set GPU vendor ID", operation: {
                 try await addRegistryValue(
                     bottle: bottle,
                     key: #"HKLM\Software\Wine\Direct3D"#,
@@ -363,6 +460,10 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
                     type: .dword,
                     value: String(identity.vendorId)
                 )
+            }) {
+                failures.append(failure)
+            }
+            if let failure = await registryResult("set GPU device ID", operation: {
                 try await addRegistryValue(
                     bottle: bottle,
                     key: #"HKLM\Software\Wine\Direct3D"#,
@@ -370,6 +471,10 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
                     type: .dword,
                     value: String(identity.deviceId)
                 )
+            }) {
+                failures.append(failure)
+            }
+            if let failure = await registryResult("set GPU memory size", operation: {
                 try await addRegistryValue(
                     bottle: bottle,
                     key: #"HKLM\Software\Wine\Direct3D"#,
@@ -377,17 +482,37 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
                     type: .string,
                     value: String(identity.vramMB)
                 )
-            } else {
-                for key in ["VideoPciVendorID", "VideoPciDeviceID", "VideoMemorySize"] {
+            }) {
+                failures.append(failure)
+            }
+        } else {
+            for key in ["VideoPciVendorID", "VideoPciDeviceID", "VideoMemorySize"] {
+                if let failure = await registryResult("delete \(key)", operation: {
                     try await deleteRegistryValue(
                         bottle: bottle,
                         key: #"HKLM\Software\Wine\Direct3D"#,
                         name: key
                     )
+                }) {
+                    failures.append(failure)
                 }
             }
+        }
+
+        if !failures.isEmpty {
+            logger.warning("Compatibility registry sync completed with warnings for \(bottle.settings.info.name): \(failures.joined(separator: "; "))")
+        }
+    }
+
+    private func registryResult(
+        _ description: String,
+        operation: () async throws -> Void
+    ) async -> String? {
+        do {
+            try await operation()
+            return nil
         } catch {
-            logger.warning("Failed to sync compatibility registry for \(bottle.settings.info.name): \(error.localizedDescription)")
+            return "\(description): \(error.localizedDescription)"
         }
     }
 

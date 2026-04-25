@@ -13,7 +13,8 @@ public struct AppVersion: Codable, Equatable, Comparable, Sendable, CustomString
 
     public init?(parsing raw: String) {
         let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-        let core = trimmed.split(separator: "-").first.map(String.init) ?? trimmed
+        let core = (trimmed.split(separator: "-").first.map(String.init) ?? trimmed)
+            .replacingOccurrences(of: "_", with: ".")
         let pieces = core.split(separator: ".")
         guard let major = pieces.first.flatMap({ Int($0) }) else {
             return nil

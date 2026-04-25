@@ -28,6 +28,8 @@ public struct RootView: View {
     @State private var deletingBottle: BottleSummary?
     @State private var renamingBottle: BottleSummary?
     @State private var renameText = ""
+    @State private var didFinishBootstrap = false
+    @State private var queuedExternalOpenURLs: [URL] = []
 
     public init(container: ScotchContainer) {
         _viewModel = StateObject(wrappedValue: AppViewModel(container: container))
@@ -47,7 +49,10 @@ public struct RootView: View {
             SettingsPanelView(
                 container: viewModel.container,
                 settings: viewModel.appSettings,
-                runtimeManifest: viewModel.runtimeManifest
+                runtimeManifest: viewModel.runtimeManifest,
+                onSave: { settings in
+                    await viewModel.saveSettings(settings)
+                }
             )
         }
         .sheet(isPresented: $showDiagnostics) {
@@ -70,6 +75,8 @@ public struct RootView: View {
         }
         .task {
             await viewModel.bootstrap()
+            didFinishBootstrap = true
+            await processQueuedExternalOpens()
         }
         .onOpenURL { url in
             Task { await handleExternalOpen(url) }
@@ -280,7 +287,7 @@ public struct RootView: View {
     private var detail: some View {
         if let bottle = viewModel.selectedBottle() {
             VStack(alignment: .leading, spacing: 0) {
-                if !viewModel.overlayDrifts.isEmpty {
+                if viewModel.runtimeUpdateVersion != nil || !viewModel.overlayDrifts.isEmpty {
                     driftBanner
                 }
                 BottleDetailView(container: viewModel.container, bottle: bottle)
@@ -327,6 +334,10 @@ public struct RootView: View {
                     Text("\(drift.component.displayName): \(drift.installedVersion ?? "-") \u{2192} \(drift.expectedVersion)")
                         .font(.caption)
                 }
+                if let version = viewModel.runtimeUpdateVersion {
+                    Text("Runtime components do not match supported Wine \(version.description) matrix")
+                        .font(.caption)
+                }
             }
             Spacer()
             Button("Update") {
@@ -355,6 +366,16 @@ public struct RootView: View {
         let supported = Set(["exe", "msi", "bat"])
         guard supported.contains(url.pathExtension.lowercased()) else { return }
 
+        guard didFinishBootstrap else {
+            queuedExternalOpenURLs.append(url)
+            return
+        }
+
+        guard !viewModel.bottles.isEmpty else {
+            viewModel.toastMessage = "Create a bottle before opening \(url.lastPathComponent)."
+            return
+        }
+
         if viewModel.bottles.count == 1, let bottle = viewModel.bottles.first {
             await runExternalFile(url, in: bottle)
             return
@@ -362,6 +383,14 @@ public struct RootView: View {
 
         if viewModel.bottles.count > 1 {
             pendingRunFileURL = url
+        }
+    }
+
+    private func processQueuedExternalOpens() async {
+        let queued = queuedExternalOpenURLs
+        queuedExternalOpenURLs.removeAll()
+        for url in queued {
+            await handleExternalOpen(url)
         }
     }
 

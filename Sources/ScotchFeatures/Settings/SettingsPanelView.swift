@@ -6,9 +6,16 @@ public struct SettingsPanelView: View {
     @StateObject private var viewModel: SettingsViewModel
     @State private var showLocationPicker = false
     @Environment(\.dismiss) private var dismiss
+    private let onSave: @MainActor (AppSettings) async -> Void
 
-    public init(container: ScotchContainer, settings: AppSettings, runtimeManifest: RuntimeManifest?) {
+    public init(
+        container: ScotchContainer,
+        settings: AppSettings,
+        runtimeManifest: RuntimeManifest?,
+        onSave: @escaping @MainActor (AppSettings) async -> Void
+    ) {
         _viewModel = StateObject(wrappedValue: SettingsViewModel(container: container, settings: settings, runtimeManifest: runtimeManifest))
+        self.onSave = onSave
     }
 
     public var body: some View {
@@ -69,7 +76,7 @@ public struct SettingsPanelView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Save") {
                         Task {
-                            await viewModel.save()
+                            await viewModel.save(using: onSave)
                             dismiss()
                         }
                     }

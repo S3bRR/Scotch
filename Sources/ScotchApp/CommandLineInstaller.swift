@@ -4,6 +4,7 @@ import AppKit
 enum CLIInstallError: LocalizedError {
     case missingExecutable
     case scriptCreationFailed
+    case cancelled
     case scriptFailed(String)
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum CLIInstallError: LocalizedError {
             return "Unable to locate ScotchCmd executable in this build."
         case .scriptCreationFailed:
             return "Failed to prepare privileged install script."
+        case .cancelled:
+            return "Install cancelled."
         case .scriptFailed(let message):
             return "Install failed: \(message)"
         }
@@ -26,12 +29,11 @@ enum CommandLineInstaller {
             return .failure(.missingExecutable)
         }
 
-        let escapedSource = sourceURL.path(percentEncoded: false)
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        let command = "mkdir -p /usr/local/bin && ln -fs \(shellQuoted(sourceURL.path(percentEncoded: false))) \(shellQuoted(symlinkPath))"
+        let escapedCommand = appleScriptEscaped(command)
 
         let script = """
-        do shell script "mkdir -p /usr/local/bin && ln -fs \\"\(escapedSource)\\" \(symlinkPath)" with administrator privileges
+        do shell script "\(escapedCommand)" with administrator privileges
         """
 
         var scriptError: NSDictionary?
@@ -44,7 +46,7 @@ enum CommandLineInstaller {
         if let scriptError {
             let description = (scriptError["NSAppleScriptErrorMessage"] as? String) ?? "Unknown error"
             if description.localizedCaseInsensitiveContains("cancel") {
-                return .success(())
+                return .failure(.cancelled)
             }
             return .failure(.scriptFailed(description))
         }
@@ -68,5 +70,17 @@ enum CommandLineInstaller {
             return candidate
         }
         return nil
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        guard !value.isEmpty else { return "''" }
+        return "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+    }
+
+    private static func appleScriptEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
     }
 }

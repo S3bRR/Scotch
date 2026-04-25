@@ -22,24 +22,14 @@ public actor ShortcutService {
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path(percentEncoded: false))
 
-        let infoPlist = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>CFBundleExecutable</key>
-            <string>launch</string>
-            <key>CFBundleName</key>
-            <string>\(program.displayName)</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>14.0</string>
-            <key>LSApplicationCategoryType</key>
-            <string>public.app-category.games</string>
-        </dict>
-        </plist>
-        """
-        try infoPlist.write(to: contentsURL.appending(path: "Info.plist"), atomically: true, encoding: .utf8)
+        let infoPlist: [String: Any] = [
+            "CFBundleExecutable": "launch",
+            "CFBundleName": program.displayName,
+            "CFBundlePackageType": "APPL",
+            "LSMinimumSystemVersion": "26.0",
+            "LSApplicationCategoryType": "public.app-category.games"
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: infoPlist, format: .xml, options: 0)
+        try data.write(to: contentsURL.appending(path: "Info.plist"), options: .atomic)
     }
 }

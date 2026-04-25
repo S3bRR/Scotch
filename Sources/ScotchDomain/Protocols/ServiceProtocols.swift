@@ -53,13 +53,14 @@ public protocol RuntimeInstallerProtocol: Sendable {
 }
 
 public protocol WineRuntimeServiceProtocol: Sendable {
+    func prepareBottleForLaunch(_ bottle: BottleSummary) async throws
     func runProgram(at url: URL, arguments: [String], bottle: BottleSummary, extraEnvironment: [String: String]) async throws
     func runSteam(in bottle: BottleSummary, arguments: [String]) async throws
     func runBatchFile(at url: URL, bottle: BottleSummary, extraEnvironment: [String: String]) async throws
     func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String]) async throws -> String
     func runWineServer(arguments: [String], bottle: BottleSummary) async throws -> String
     func syncCompatibilityState(for bottle: BottleSummary) async
-    func killBottle(_ bottle: BottleSummary) async
+    func killBottle(_ bottle: BottleSummary, timeout: TimeInterval?) async
     func latestLogURL(for bottle: BottleSummary) async -> URL?
     func makeShellEnvironment(for bottle: BottleSummary) async -> [String: String]
     func generateRunCommand(at url: URL, arguments: [String], bottle: BottleSummary, extraEnvironment: [String: String]) async -> String
@@ -67,6 +68,12 @@ public protocol WineRuntimeServiceProtocol: Sendable {
     func readLog(at url: URL, maxCharacters: Int) async -> String
     func listProcesses(in bottle: BottleSummary) async throws -> [BottleProcessInfo]
     func killProcess(pid: Int, in bottle: BottleSummary) async throws
+}
+
+public extension WineRuntimeServiceProtocol {
+    func killBottle(_ bottle: BottleSummary) async {
+        await killBottle(bottle, timeout: nil)
+    }
 }
 
 public protocol AppSettingsStoreProtocol: Sendable {

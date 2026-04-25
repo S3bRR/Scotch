@@ -1,23 +1,29 @@
 import Foundation
 
 public extension String {
-    var shellEscaped: String {
-        let characters = [
-            "\\", "\"", "'", " ", "(", ")", "[", "]", "{", "}", "&", "|",
-            ";", "<", ">", "`", "$", "!", "*", "?", "#", "~", "="
-        ]
+    var shellQuoted: String {
+        guard !isEmpty else { return "''" }
+        return "'\(replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+    }
 
-        var escaped = self
-        for character in characters {
-            escaped = escaped.replacingOccurrences(of: character, with: "\\" + character)
+    var shellEscaped: String {
+        shellQuoted
+    }
+
+    var isShellEnvironmentKey: Bool {
+        guard let first = unicodeScalars.first,
+              first == "_" || CharacterSet.letters.contains(first) else {
+            return false
         }
-        return escaped
+        return unicodeScalars.allSatisfy { scalar in
+            scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
+        }
     }
 }
 
 public extension URL {
     var shellEscapedPath: String {
-        path(percentEncoded: false).shellEscaped
+        path(percentEncoded: false).shellQuoted
     }
 
     func userFacingPath(bundleIdentifier: String, userName: String = NSUserName()) -> String {

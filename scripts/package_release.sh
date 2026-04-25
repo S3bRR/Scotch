@@ -21,6 +21,7 @@ THUMBNAIL_BIN="$ROOT_DIR/.build/release/ScotchThumbnail"
 # Runtime/package parity checks for required artifacts.
 REQUIRED_PATHS=(
   "$ROOT_DIR/Sources/ScotchRuntime/Resources/VulkanSpoof/libMoltenVK_shim.c"
+  "$ROOT_DIR/Sources/ScotchRuntime/Resources/VulkanSpoof/libscotch_gpu_spoof.dylib"
   "$ROOT_DIR/Sources/ScotchApp/Info.plist"
   "$ROOT_DIR/Sources/ScotchApp/Scotch.entitlements"
   "$ROOT_DIR/Sources/ScotchThumbnail/Info.plist"
@@ -32,6 +33,14 @@ for path in "${REQUIRED_PATHS[@]}"; do
     exit 1
   fi
 done
+
+if command -v lipo >/dev/null 2>&1; then
+  SHIM_ARCHES="$(lipo -archs "$ROOT_DIR/Sources/ScotchRuntime/Resources/VulkanSpoof/libscotch_gpu_spoof.dylib")"
+  if [[ " $SHIM_ARCHES " != *" x86_64 "* ]]; then
+    echo "GPU spoof shim must include x86_64, got: $SHIM_ARCHES"
+    exit 1
+  fi
+fi
 
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
@@ -74,6 +83,14 @@ fi
 
 if command -v codesign >/dev/null 2>&1; then
   CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+  while IFS= read -r -d '' resource_file; do
+    if file -b "$resource_file" | grep -q "Mach-O"; then
+      codesign --force --sign "$CODESIGN_IDENTITY" \
+        --options runtime \
+        "$resource_file"
+    fi
+  done < <(find "$APP_BUNDLE/Contents/Resources" -type f -print0)
+
   codesign --force --sign "$CODESIGN_IDENTITY" \
     --entitlements "$ROOT_DIR/Sources/ScotchApp/Scotch.entitlements" \
     --options runtime \

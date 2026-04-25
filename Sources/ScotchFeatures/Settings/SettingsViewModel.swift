@@ -15,8 +15,8 @@ public final class SettingsViewModel: ObservableObject {
         self.runtimeManifest = runtimeManifest
     }
 
-    public func save() async {
-        await container.settingsStore.saveSettings(settings)
+    public func save(using persist: @MainActor (AppSettings) async -> Void) async {
+        await persist(settings)
         statusMessage = "Saved settings."
     }
 

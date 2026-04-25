@@ -226,6 +226,13 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     public func runProgramInTerminal(_ program: ProgramRecord) async {
+        do {
+            try await container.runtimeService.prepareBottleForLaunch(bottle)
+        } catch {
+            statusMessage = "Failed to prepare bottle: \(error.localizedDescription)"
+            return
+        }
+
         let command = await container.runtimeService.generateRunCommand(
             at: program.executableURL,
             arguments: program.settings.parsedArguments(),
@@ -571,6 +578,7 @@ public final class BottleDetailViewModel: ObservableObject {
 
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
             guard key != "PATH", key != "WINE" else { continue }
+            guard key.isShellEnvironmentKey else { continue }
             lines.append("export \(key)=\(shellQuoted(value))")
         }
 
@@ -579,7 +587,7 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     private func shellQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
+        value.shellQuoted
     }
 
     private func escapeAppleScriptString(_ input: String) -> String {

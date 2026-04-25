@@ -28,11 +28,39 @@ private struct GitHubReleaseResponse: Decodable {
     }
 }
 
+private struct RuntimeAssetRequirement: Sendable {
+    let displayName: String
+    let repo: String
+    let versionTag: String
+    let assetNamePatterns: [String]
+}
+
 public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     private enum OverlayVersion {
         static let winemac = "wine-openglpatch-11.6"
         static let d3dmetal = "d3dmetal-3.0"
         static let zink = "zink-1.0"
+    }
+
+    private enum RuntimeMatrix {
+        static let wine = RuntimeAssetRequirement(
+            displayName: "Wine",
+            repo: "Gcenx/macOS_Wine_builds",
+            versionTag: "11.6_1",
+            assetNamePatterns: ["wine-staging-", "-osx64"]
+        )
+        static let dxvk = RuntimeAssetRequirement(
+            displayName: "DXVK",
+            repo: "Gcenx/DXVK-macOS",
+            versionTag: "v1.10.3-20230507-repack",
+            assetNamePatterns: ["dxvk-macOS-async", "-repack.tar"]
+        )
+        static let dxmt = RuntimeAssetRequirement(
+            displayName: "DXMT",
+            repo: "3Shain/dxmt",
+            versionTag: "v0.74",
+            assetNamePatterns: ["dxmt-", "builtin.tar"]
+        )
     }
 
     private let paths: AppPaths
@@ -85,9 +113,9 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     public func fetchLatestReleases() async throws -> RuntimeReleases {
-        async let wine = fetchLatestAsset(repo: "Gcenx/macOS_Wine_builds", patterns: ["wine-staging-", "-osx64"])
-        async let dxvk = fetchLatestAsset(repo: "Gcenx/DXVK-macOS", patterns: ["dxvk-macOS-async", "-repack.tar"])
-        async let dxmt = fetchLatestAsset(repo: "3Shain/dxmt", patterns: ["dxmt-", "builtin.tar"])
+        async let wine = fetchAsset(RuntimeMatrix.wine)
+        async let dxvk = fetchAsset(RuntimeMatrix.dxvk)
+        async let dxmt = fetchAsset(RuntimeMatrix.dxmt)
         return RuntimeReleases(wine: try await wine, dxvk: try await dxvk, dxmt: try await dxmt)
     }
 
@@ -180,14 +208,16 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         guard let manifest = await currentManifest() else {
             return (false, AppVersion(0, 0, 0))
         }
-        do {
-            let releases = try await fetchLatestReleases()
-            let local = AppVersion(parsing: manifest.wineVersion) ?? AppVersion(0, 0, 0)
-            let remote = AppVersion(parsing: releases.wine.versionTag) ?? AppVersion(0, 0, 0)
-            return (local < remote, remote)
-        } catch {
-            return (false, AppVersion(0, 0, 0))
-        }
+        let expectedWine = RuntimeMatrix.wine.versionTag
+        let expectedDXVK = RuntimeMatrix.dxvk.versionTag
+        let expectedDXMT = RuntimeMatrix.dxmt.versionTag
+        let expectedVersion = AppVersion(parsing: expectedWine) ?? AppVersion(0, 0, 0)
+        return (
+            manifest.wineVersion != expectedWine ||
+                manifest.dxvkVersion != expectedDXVK ||
+                manifest.dxmtVersion != expectedDXMT,
+            expectedVersion
+        )
     }
 
     public func overlayDrifts() async -> [OverlayDrift] {
@@ -208,8 +238,8 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         return drifts
     }
 
-    private func fetchLatestAsset(repo: String, patterns: [String]) async throws -> ReleaseAsset {
-        guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
+    private func fetchAsset(_ requirement: RuntimeAssetRequirement) async throws -> ReleaseAsset {
+        guard let url = URL(string: "https://api.github.com/repos/\(requirement.repo)/releases/tags/\(requirement.versionTag)") else {
             throw RuntimeInstallerError.invalidURL
         }
 
@@ -221,23 +251,28 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         do {
             let data = try await networkClient.data(for: request)
             let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
+            guard release.tagName == requirement.versionTag else {
+                throw RuntimeInstallerError.releaseDiscoveryFailed(
+                    "\(requirement.repo): expected tag \(requirement.versionTag), got \(release.tagName)"
+                )
+            }
             if release.draft == true {
-                throw RuntimeInstallerError.releaseDiscoveryFailed("\(repo): latest release is marked as draft")
+                throw RuntimeInstallerError.releaseDiscoveryFailed("\(requirement.repo): release \(requirement.versionTag) is marked as draft")
             }
             if release.prerelease == true {
-                throw RuntimeInstallerError.releaseDiscoveryFailed("\(repo): latest release is marked as prerelease")
+                throw RuntimeInstallerError.releaseDiscoveryFailed("\(requirement.repo): release \(requirement.versionTag) is marked as prerelease")
             }
             let asset = release.assets.first(where: { asset in
-                patterns.allSatisfy { asset.name.contains($0) }
-            }) ?? release.assets.first(where: { $0.name.hasSuffix(".tar.xz") || $0.name.hasSuffix(".tar.gz") || $0.name.hasSuffix(".tgz") })
+                requirement.assetNamePatterns.allSatisfy { asset.name.contains($0) }
+            })
 
             guard let matched = asset else {
-                throw RuntimeInstallerError.missingAsset(repo)
+                throw RuntimeInstallerError.missingAsset("\(requirement.displayName) \(requirement.versionTag) in \(requirement.repo)")
             }
 
             return ReleaseAsset(
                 name: matched.name,
-                versionTag: release.tagName,
+                versionTag: requirement.versionTag,
                 downloadURL: matched.browserDownloadURL,
                 size: matched.size,
                 sha256: await resolveChecksumIfAvailable(for: matched.name, in: release.assets)
@@ -245,7 +280,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         } catch let error as RuntimeInstallerError {
             throw error
         } catch {
-            throw RuntimeInstallerError.releaseDiscoveryFailed("\(repo): \(error.localizedDescription)")
+            throw RuntimeInstallerError.releaseDiscoveryFailed("\(requirement.repo): \(error.localizedDescription)")
         }
     }
 
@@ -568,11 +603,11 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
 
     private func installGPUSpoofShim() async throws {
         let sourceURL =
-            Bundle.module.url(forResource: "libMoltenVK_shim", withExtension: "c", subdirectory: "VulkanSpoof")
-            ?? Bundle.module.url(forResource: "libMoltenVK_shim", withExtension: "c")
+            Bundle.module.url(forResource: "libscotch_gpu_spoof", withExtension: "dylib", subdirectory: "VulkanSpoof")
+            ?? Bundle.module.url(forResource: "libscotch_gpu_spoof", withExtension: "dylib")
 
         guard let sourceURL else {
-            throw RuntimeInstallerError.installFailed("GPU spoof shim source not bundled in runtime resources")
+            throw RuntimeInstallerError.installFailed("GPU spoof shim dylib not bundled in runtime resources")
         }
 
         let spoofDirectory = paths.librariesDirectory.appending(path: "VulkanSpoof")
@@ -585,35 +620,8 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             try fileSystem.removeItem(at: outputURL)
         }
 
-        try await buildGPUSpoofShim(sourceURL: sourceURL, outputURL: outputURL)
-    }
-
-    private func buildGPUSpoofShim(sourceURL: URL, outputURL: URL) async throws {
-        let spec = ProcessSpecification(
-            executableURL: URL(fileURLWithPath: "/usr/bin/clang"),
-            arguments: [
-                "-arch", "x86_64",
-                "-std=c11",
-                "-O2",
-                "-fvisibility=hidden",
-                "-dynamiclib",
-                "-Wl,-install_name,@rpath/libMoltenVK.dylib",
-                "-o", outputURL.path(percentEncoded: false),
-                sourceURL.path(percentEncoded: false)
-            ],
-            displayName: "clang -dynamiclib"
-        )
-
-        do {
-            _ = try await processRunner.captureProcess(spec, outputFileHandle: nil)
-        } catch let ProcessRunnerError.nonZeroExit(_, status, output) {
-            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw RuntimeInstallerError.installFailed(
-                "GPU spoof shim build failed (clang exit \(status))\(trimmed.isEmpty ? "" : ": \(trimmed)")"
-            )
-        } catch {
-            throw RuntimeInstallerError.installFailed("Failed to launch clang for GPU spoof shim: \(error.localizedDescription)")
-        }
+        try fileSystem.copyItem(at: sourceURL, to: outputURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: outputURL.path(percentEncoded: false))
     }
 
     private var wineLauncherScript: String {
@@ -636,7 +644,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             <key>CFBundleIdentifier</key><string>com.s3brr.Scotch.WineBundle</string>
             <key>CFBundleName</key><string>Wine</string>
             <key>CFBundlePackageType</key><string>APPL</string>
-            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>LSMinimumSystemVersion</key><string>26.0</string>
             <key>NSPrincipalClass</key><string>NSApplication</string>
             <key>LSUIElement</key><false/>
             <key>LSBackgroundOnly</key><false/>
