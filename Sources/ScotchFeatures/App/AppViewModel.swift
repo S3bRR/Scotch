@@ -9,6 +9,7 @@ public final class AppViewModel: ObservableObject {
         case idle
         case checking
         case installingRosetta
+        case checkingGStreamer
         case fetchingRuntime
         case downloadingRuntime(Double)
         case installingRuntime
@@ -269,6 +270,11 @@ public final class AppViewModel: ObservableObject {
                     setupStage = .failed("Rosetta installation did not complete successfully.")
                     return
                 }
+            }
+
+            setupStage = .checkingGStreamer
+            if !(await container.gstreamerService.isInstalled()) {
+                toastMessage = "GStreamer.framework is not installed. Wine 11.16 uses it for media; games using DXVK/DXMT/D3DMetal still run. Install the official GStreamer runtime if videos fail."
             }
 
             setupStage = .fetchingRuntime

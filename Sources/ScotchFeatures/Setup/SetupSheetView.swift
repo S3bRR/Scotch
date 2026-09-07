@@ -13,7 +13,7 @@ public struct SetupSheetView: View {
             VStack(alignment: .leading, spacing: ScotchTheme.Spacing.xSmall) {
                 Text("Scotch Setup")
                     .font(.title2.weight(.semibold))
-                Text("Rosetta and runtime components are required before creating or launching bottles.")
+                Text("Rosetta, Wine Staging 11.16, and translation backends are required before creating or launching bottles.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -73,6 +73,12 @@ public struct SetupSheetView: View {
                     .controlSize(.small)
                 Text("Installing Rosetta...")
             }
+        case .checkingGStreamer:
+            HStack(spacing: ScotchTheme.Spacing.small) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Checking GStreamer.framework...")
+            }
         case .fetchingRuntime:
             HStack(spacing: ScotchTheme.Spacing.small) {
                 ProgressView()
@@ -130,7 +136,7 @@ public struct SetupSheetView: View {
 
     private var installButtonDisabled: Bool {
         switch viewModel.setupStage {
-        case .checking, .installingRosetta, .fetchingRuntime, .downloadingRuntime, .installingRuntime:
+        case .checking, .installingRosetta, .checkingGStreamer, .fetchingRuntime, .downloadingRuntime, .installingRuntime:
             return true
         default:
             return false

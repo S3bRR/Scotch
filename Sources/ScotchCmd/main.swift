@@ -377,6 +377,11 @@ struct ScotchCommandLine {
                 }
             }
 
+            if !(await GStreamerService().isInstalled()) {
+                print("Warning: GStreamer.framework is not installed. Wine 11.16 uses it for media playback.")
+                print("Install: https://gstreamer.freedesktop.org/data/pkg/osx/1.28.5/gstreamer-1.0-1.28.5-universal.pkg")
+            }
+
             print("Resolving runtime releases…")
             let releases = try await services.runtimeInstaller.fetchLatestReleases()
             print("Wine \(releases.wine.versionTag) (\(releases.wine.name))")

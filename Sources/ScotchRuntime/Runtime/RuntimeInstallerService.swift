@@ -37,16 +37,18 @@ private struct RuntimeAssetRequirement: Sendable {
 
 public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     private enum OverlayVersion {
-        static let winemac = "wine-openglpatch-11.6"
+        /// Gcenx Wine 11.16 is built `--without-opengl`. The 11.6 byte patch
+        /// must not be overlaid onto a different winemac.so.
+        static let winemac = "stock-11.16"
         static let d3dmetal = "d3dmetal-3.0"
-        static let zink = "zink-1.0"
+        static let zink = "zink-2.0"
     }
 
     private enum RuntimeMatrix {
         static let wine = RuntimeAssetRequirement(
             displayName: "Wine",
             repo: "Gcenx/macOS_Wine_builds",
-            versionTag: "11.6_1",
+            versionTag: "11.16",
             assetNamePatterns: ["wine-staging-", "-osx64"]
         )
         static let dxvk = RuntimeAssetRequirement(
@@ -438,6 +440,16 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     private func installOverlay(component: OverlayComponent) async throws -> OverlayInstallResult {
+        if component == .winemacOpenGLPatch {
+            try verifyOverlayInstall(component: .winemacOpenGLPatch)
+            logger.info("Using stock winemac.so from Wine \(RuntimeMatrix.wine.versionTag)")
+            return OverlayInstallResult(
+                component: component,
+                installedVersion: OverlayVersion.winemac,
+                errorMessage: nil
+            )
+        }
+
         let descriptor = overlayDescriptor(for: component)
         guard let url = URL(string: "https://github.com/S3bRR/Scotch/releases/download/\(descriptor.versionTag)/\(descriptor.fileName)") else {
             throw RuntimeInstallerError.installFailed("Invalid overlay URL for \(component.displayName)")
@@ -457,7 +469,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         case .d3dmetal:
             (OverlayVersion.d3dmetal, "d3dmetal-3.0.tar.gz", paths.librariesDirectory)
         case .zink:
-            (OverlayVersion.zink, "zink-1.0.tar.gz", paths.librariesDirectory)
+            (OverlayVersion.zink, "zink-2.0.tar.gz", paths.librariesDirectory)
         }
     }
 
@@ -466,17 +478,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         case .winemacOpenGLPatch:
             let winemac = paths.librariesDirectory.appending(path: "Wine/lib/wine/x86_64-unix/winemac.so")
             guard fileSystem.fileExists(at: winemac) else {
-                throw RuntimeInstallerError.installFailed("winemac overlay verification failed: winemac.so missing")
-            }
-
-            let handle = try FileHandle(forReadingFrom: winemac)
-            defer { try? handle.close() }
-            try handle.seek(toOffset: 0x3290f)
-            let byte = try handle.read(upToCount: 1)?.first ?? 0
-            guard byte == 0x90 else {
-                throw RuntimeInstallerError.installFailed(
-                    "winemac overlay verification failed: sentinel byte mismatch at 0x3290f (got 0x\(String(byte, radix: 16)))"
-                )
+                throw RuntimeInstallerError.installFailed("winemac verification failed: winemac.so missing from Wine \(RuntimeMatrix.wine.versionTag)")
             }
         case .d3dmetal:
             let d3d12DLL = paths.librariesDirectory.appending(path: "D3DMetal/x64/d3d12.dll")

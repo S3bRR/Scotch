@@ -79,7 +79,7 @@ public struct BottleWineConfig: Codable, Equatable, Sendable {
     public var avxEnabled: Bool
 
     public init(
-        wineVersion: AppVersion = AppVersion(11, 0, 0),
+        wineVersion: AppVersion = AppVersion(11, 16, 0),
         windowsVersion: WindowsVersion = .win10,
         enhancedSync: EnhancedSyncMode = .msync,
         avxEnabled: Bool = false

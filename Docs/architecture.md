@@ -23,6 +23,8 @@ All writable state lives under `~/Library/Application Support/com.s3brr.Scotch/`
 
 Legacy `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` are read on first launch after 1.1.0 and copied into Application Support. Runtime reinstall replaces only `Libraries/`, never bottles or settings.
 
+Runtime matrix is pinned in `RuntimeInstallerService.RuntimeMatrix`: Wine Staging **11.16**, DXVK-macOS **1.10.3-repack**, DXMT **0.80**, D3DMetal **3.0**, Zink **26.2.0** (`zink-2.0`). Gcenx Wine 11.16 is `--without-opengl`, so the 11.6 `winemac.so` byte patch is not applied.
+
 Uninstall (`Settings → Uninstall Scotch`, or `scotch uninstall --all`) kills Wine, then deletes the Application Support tree, leftover Containers/Logs folders, caches, CLI symlink, GPU spoof log, recorded shortcuts, and optionally bottles plus `Scotch.app`. Extra paths (custom bottle folders, desktop shortcuts, CLI) are appended to `InstallLedger.plist` as they are created. See `Docs/install_locations.md`.
 
 ## Compatibility strategy

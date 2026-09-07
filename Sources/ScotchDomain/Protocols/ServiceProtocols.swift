@@ -87,6 +87,10 @@ public protocol RosettaServiceProtocol: Sendable {
     func installIfNeeded() async throws -> Bool
 }
 
+public protocol GStreamerServiceProtocol: Sendable {
+    func isInstalled() async -> Bool
+}
+
 public protocol WinetricksServiceProtocol: Sendable {
     func ensureInstalled() async throws
     func parseVerbs() async throws -> [WinetricksCategoryListing]

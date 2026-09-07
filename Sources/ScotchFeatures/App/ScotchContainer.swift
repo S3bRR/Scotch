@@ -17,6 +17,7 @@ public final class ScotchContainer: Sendable {
     public let bottleRepository: BottleRepositoryProtocol
     public let settingsStore: AppSettingsStoreProtocol
     public let rosettaService: RosettaServiceProtocol
+    public let gstreamerService: GStreamerServiceProtocol
     public let shortcutService: ShortcutService
     public let winetricksService: WinetricksServiceProtocol
     public let uninstallService: UninstallServiceProtocol
@@ -80,6 +81,7 @@ public final class ScotchContainer: Sendable {
             searchURLs: paths.settingsSearchURLs
         )
         self.rosettaService = RosettaService(processRunner: processRunner)
+        self.gstreamerService = GStreamerService()
         self.shortcutService = ShortcutService()
         let installLedger = InstallLedgerStore(paths: paths, store: plistStore)
         self.installLedger = installLedger
@@ -107,6 +109,7 @@ public final class ScotchContainer: Sendable {
         bottleRepository: BottleRepositoryProtocol,
         settingsStore: AppSettingsStoreProtocol,
         rosettaService: RosettaServiceProtocol,
+        gstreamerService: GStreamerServiceProtocol,
         shortcutService: ShortcutService,
         winetricksService: WinetricksServiceProtocol,
         uninstallService: UninstallServiceProtocol,
@@ -124,6 +127,7 @@ public final class ScotchContainer: Sendable {
         self.bottleRepository = bottleRepository
         self.settingsStore = settingsStore
         self.rosettaService = rosettaService
+        self.gstreamerService = gstreamerService
         self.shortcutService = shortcutService
         self.winetricksService = winetricksService
         self.uninstallService = uninstallService
