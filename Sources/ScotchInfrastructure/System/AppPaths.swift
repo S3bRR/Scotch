@@ -4,8 +4,12 @@ import ScotchDomain
 public struct AppPaths: Sendable {
     public let bundleIdentifier: String
     public let applicationSupportDirectory: URL
-    public let containerDirectory: URL
     public let logsDirectory: URL
+    public let legacyContainerDirectory: URL
+    public let legacyLogsDirectory: URL
+    public let preferencesURL: URL
+    public let cachesDirectory: URL
+    public let savedStateDirectory: URL
 
     public var librariesDirectory: URL {
         applicationSupportDirectory.appending(path: "Libraries")
@@ -16,19 +20,27 @@ public struct AppPaths: Sendable {
     }
 
     public var bottleCatalogURL: URL {
-        containerDirectory.appending(path: BottleCatalog.fileName)
+        applicationSupportDirectory.appending(path: BottleCatalog.fileName)
     }
 
     public var alternateBottleCatalogURL: URL {
-        containerDirectory.appending(path: BottleCatalog.alternateFileName)
+        applicationSupportDirectory.appending(path: BottleCatalog.alternateFileName)
     }
 
     public var settingsURL: URL {
-        containerDirectory.appending(path: AppSettings.fileName)
+        applicationSupportDirectory.appending(path: AppSettings.fileName)
     }
 
     public var defaultBottlesDirectory: URL {
-        containerDirectory.appending(path: "Bottles")
+        applicationSupportDirectory.appending(path: "Bottles")
+    }
+
+    public var winetricksCacheDirectory: URL {
+        applicationSupportDirectory.appending(path: "WinetricksCache")
+    }
+
+    public var launchEnvironmentDirectory: URL {
+        applicationSupportDirectory.appending(path: "LaunchEnv")
     }
 
     public var wineBundleURL: URL {
@@ -51,16 +63,53 @@ public struct AppPaths: Sendable {
         librariesDirectory.appending(path: "winetricks")
     }
 
+    public var commandLineToolURL: URL {
+        URL(fileURLWithPath: "/usr/local/bin/scotch")
+    }
+
+    public var gpuSpoofLogURL: URL {
+        URL(fileURLWithPath: "/tmp/scotch_gpu_spoof.log")
+    }
+
+    public var catalogSearchURLs: [URL] {
+        [
+            bottleCatalogURL,
+            alternateBottleCatalogURL,
+            legacyContainerDirectory.appending(path: BottleCatalog.fileName),
+            legacyContainerDirectory.appending(path: BottleCatalog.alternateFileName)
+        ]
+    }
+
+    public var settingsSearchURLs: [URL] {
+        [
+            settingsURL,
+            legacyContainerDirectory.appending(path: AppSettings.fileName)
+        ]
+    }
+
     public init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.s3brr.Scotch") {
         self.bundleIdentifier = bundleIdentifier
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         self.applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: bundleIdentifier)
-        self.containerDirectory = FileManager.default.homeDirectoryForCurrentUser
+        self.logsDirectory = applicationSupportDirectory.appending(path: "Logs")
+        self.legacyContainerDirectory = home
             .appending(path: "Library")
             .appending(path: "Containers")
             .appending(path: bundleIdentifier)
-        self.logsDirectory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        self.legacyLogsDirectory = library
             .appending(path: "Logs")
             .appending(path: bundleIdentifier)
+        self.preferencesURL = home
+            .appending(path: "Library")
+            .appending(path: "Preferences")
+            .appending(path: "\(bundleIdentifier).plist")
+        self.cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: bundleIdentifier)
+        self.savedStateDirectory = home
+            .appending(path: "Library")
+            .appending(path: "Saved Application State")
+            .appending(path: "\(bundleIdentifier).savedState")
     }
 }

@@ -172,23 +172,21 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         extraEnvironment: [String: String]
     ) async -> String {
         let environment = envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment)
-        var command = "/usr/bin/open -n -a \(paths.wineBundleURL.shellEscapedPath) --args start /unix \(url.shellEscapedPath)"
+        let envFile = writeLaunchEnvironmentFile(environment, bottle: bottle)
+        var launchEnvironment = environment
+        launchEnvironment["SCOTCH_LAUNCH_ENV"] = envFile.path(percentEncoded: false)
+
+        var command = "/usr/bin/open -n -a \(paths.wineBundleURL.shellEscapedPath) --arch x86_64"
+        command += " --env SCOTCH_LAUNCH_ENV=\(envFile.path(percentEncoded: false).shellQuoted)"
+        for key in Self.launchEnvironmentPassthroughKeys {
+            guard let value = launchEnvironment[key], key.isShellEnvironmentKey else { continue }
+            command += " --env \(key)=\(value.shellQuoted)"
+        }
+        command += " --args start /unix \(url.shellEscapedPath)"
 
         if !arguments.isEmpty {
             let escapedArguments = arguments.map { $0.shellEscaped }.joined(separator: " ")
             command += " \(escapedArguments)"
-        }
-
-        let assignments = environment
-            .sorted(by: { $0.key < $1.key })
-            .compactMap { pair -> String? in
-                let key = pair.key
-                let value = pair.value
-                guard key.isShellEnvironmentKey else { return nil }
-                return "\(key)=\(value.shellQuoted)"
-            }
-        if !assignments.isEmpty {
-            command = assignments.joined(separator: " ") + " " + command
         }
 
         if let commandLineToolURL = bundledCommandLineToolURL() {
@@ -218,28 +216,74 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
             arguments: arguments,
             bottle: bottle,
             extraEnvironment: extraEnvironment,
-            displayName: displayName
+            displayName: displayName,
+            logURL: logDestination.fileURL
         )
         _ = try await processRunner.captureProcess(specification, outputFileHandle: logDestination.fileHandle)
     }
+
+    private static let launchEnvironmentPassthroughKeys = [
+        "WINEPREFIX", "WINE", "WINELOADER", "WINESERVER", "PATH",
+        "WINEDLLOVERRIDES", "WINEESYNC", "WINEMSYNC", "WINEDEBUG", "GST_DEBUG",
+        "DXVK_HUD", "DXVK_ASYNC", "DXVK_CONFIG_FILE", "DXVK_VENDOR_ID", "DXVK_DEVICE_ID",
+        "GALLIUM_DRIVER", "MESA_LOADER_DRIVER_OVERRIDE", "LIBGL_ALWAYS_SOFTWARE",
+        "SCOTCH_GPU_SPOOF_LIB", "SCOTCH_GPU_VENDOR_ID", "SCOTCH_GPU_DEVICE_ID",
+        "SCOTCH_GPU_DEVICE_NAME", "SCOTCH_GPU_VRAM_MB", "SCOTCH_REAL_MOLTENVK_PATH",
+        "CX_LIBVULKAN", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH",
+        "MVK_CONFIG_RESUME_LOST_DEVICE", "MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE",
+        "ROSETTA_ADVERTISE_AVX", "MTL_HUD_ENABLED", "METAL_CAPTURE_ENABLED",
+        "D3DM_SUPPORT_DXR", "W_CACHE", "HOME", "TMPDIR", "USER", "LANG"
+    ]
 
     private func wineBundleSpecification(
         arguments: [String],
         bottle: BottleSummary,
         extraEnvironment: [String: String],
-        displayName: String
+        displayName: String,
+        logURL: URL
     ) -> ProcessSpecification {
-        ProcessSpecification(
+        let environment = envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment)
+        let envFile = writeLaunchEnvironmentFile(environment, bottle: bottle)
+        var launchEnvironment = environment
+        launchEnvironment["SCOTCH_LAUNCH_ENV"] = envFile.path(percentEncoded: false)
+
+        var openArguments = [
+            "-n",
+            "-a",
+            paths.wineBundleURL.path(percentEncoded: false),
+            "--arch", "x86_64",
+            "--stdout", logURL.path(percentEncoded: false),
+            "--stderr", logURL.path(percentEncoded: false),
+            "--env", "SCOTCH_LAUNCH_ENV=\(envFile.path(percentEncoded: false))"
+        ]
+
+        let merged = ProcessInfo.processInfo.environment.merging(launchEnvironment, uniquingKeysWith: { _, new in new })
+        for key in Self.launchEnvironmentPassthroughKeys {
+            guard let value = merged[key], key.isShellEnvironmentKey else { continue }
+            openArguments.append("--env")
+            openArguments.append("\(key)=\(value)")
+        }
+
+        openArguments.append("--args")
+        openArguments.append(contentsOf: arguments)
+
+        return ProcessSpecification(
             executableURL: URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: [
-                "-n",
-                "-a",
-                paths.wineBundleURL.path(percentEncoded: false),
-                "--args"
-            ] + arguments,
-            environment: envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment),
+            arguments: openArguments,
+            environment: launchEnvironment,
             displayName: displayName
         )
+    }
+
+    private func writeLaunchEnvironmentFile(_ environment: [String: String], bottle: BottleSummary) -> URL {
+        let directory = paths.launchEnvironmentDirectory
+        if !fileSystem.fileExists(at: directory) {
+            try? fileSystem.createDirectory(at: directory)
+        }
+        let url = directory.appending(path: "\(bottle.id.rawValue).env")
+        let body = envAssembler.launchEnvironmentFileContents(environment)
+        try? body.write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     public func listProcesses(in bottle: BottleSummary) async throws -> [BottleProcessInfo] {

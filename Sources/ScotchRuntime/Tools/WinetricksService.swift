@@ -3,7 +3,7 @@ import ScotchDomain
 import ScotchInfrastructure
 
 public actor WinetricksService: WinetricksServiceProtocol {
-    static let remoteScriptURL = URL(string: "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks")!
+    static let remoteScriptURL = URL(string: "https://raw.githubusercontent.com/Winetricks/winetricks/f3890f670867b5ffbc3938726db45c0f7d16c8ba/src/winetricks")!
     static let coreFontVerbs = [
         "andale", "arial", "comicsans", "courier", "georgia",
         "impact", "times", "trebuchet", "verdana", "webdings"
@@ -35,6 +35,9 @@ public actor WinetricksService: WinetricksServiceProtocol {
 
         if !fileSystem.fileExists(at: paths.librariesDirectory) {
             try fileSystem.createDirectory(at: paths.librariesDirectory)
+        }
+        if !fileSystem.fileExists(at: paths.winetricksCacheDirectory) {
+            try fileSystem.createDirectory(at: paths.winetricksCacheDirectory)
         }
 
         let data: Data
@@ -142,6 +145,7 @@ public actor WinetricksService: WinetricksServiceProtocol {
         environment["WINE"] = "wine"
         environment["WINETRICKS_GUI"] = "none"
         environment["W_OPT_UNATTENDED"] = "1"
+        environment["W_CACHE"] = paths.winetricksCacheDirectory.path(percentEncoded: false)
 
         if let bottle {
             environment["WINEPREFIX"] = bottle.directoryURL.path(percentEncoded: false)

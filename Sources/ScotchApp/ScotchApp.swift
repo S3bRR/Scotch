@@ -43,6 +43,9 @@ struct ScotchAppMain: App {
                         NotificationCenter.default.post(name: .scotchCLIInstallResult, object: message)
                     }
                 }
+                Button("Uninstall Scotch…") {
+                    NotificationCenter.default.post(name: .scotchOpenSettings, object: nil)
+                }
             }
 
             CommandGroup(after: .newItem) {

@@ -16,8 +16,15 @@ public struct EnvironmentAssembler {
         var environment: [String: String] = [
             "WINEPREFIX": bottle.directoryURL.path(percentEncoded: false),
             "WINEDEBUG": "fixme-all",
-            "GST_DEBUG": "1"
+            "GST_DEBUG": "1",
+            "WINE": paths.wineBinaryURL.path(percentEncoded: false),
+            "WINELOADER": paths.wineBinaryURL.path(percentEncoded: false),
+            "WINESERVER": paths.wineServerBinaryURL.path(percentEncoded: false),
+            "W_CACHE": paths.winetricksCacheDirectory.path(percentEncoded: false)
         ]
+
+        let originalPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = "\(paths.runtimeBinDirectory.path(percentEncoded: false)):\(originalPath)"
 
         applyCompatibilityEnvironment(settings: bottle.settings, environment: &environment)
 
@@ -34,6 +41,8 @@ public struct EnvironmentAssembler {
             environment["SCOTCH_REAL_MOLTENVK_PATH"] = paths.librariesDirectory
                 .appending(path: "Wine/lib/libMoltenVK.dylib")
                 .path(percentEncoded: false)
+            environment["DXVK_VENDOR_ID"] = String(format: "%x", identity.vendorId)
+            environment["DXVK_DEVICE_ID"] = String(format: "%x", identity.deviceId)
 
             if bottle.settings.backend.backend == .dxvk {
                 environment["DXVK_CONFIG_FILE"] = bottle.directoryURL
@@ -50,21 +59,27 @@ public struct EnvironmentAssembler {
         bottle: BottleSummary,
         extra: [String: String] = [:]
     ) -> [String: String] {
-        var environment: [String: String] = [
-            "WINEPREFIX": bottle.directoryURL.path(percentEncoded: false),
-            "WINEDEBUG": "fixme-all",
-            "GST_DEBUG": "1"
-        ]
+        var environment = makeWineEnvironment(bottle: bottle, extra: extra)
         environment.merge(extra, uniquingKeysWith: { _, new in new })
         return environment
     }
 
     public func makeShellEnvironment(bottle: BottleSummary) -> [String: String] {
         var environment = makeWineEnvironment(bottle: bottle)
-        let originalPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        environment["PATH"] = "\(paths.runtimeBinDirectory.path(percentEncoded: false)):\(originalPath)"
         environment["WINE"] = "wine"
         return environment
+    }
+
+    public func launchEnvironmentFileContents(_ environment: [String: String]) -> String {
+        environment
+            .keys
+            .sorted()
+            .compactMap { key -> String? in
+                guard key.isShellEnvironmentKey, let value = environment[key] else { return nil }
+                return "export \(key)=\(value.shellQuoted)"
+            }
+            .joined(separator: "\n")
+            + "\n"
     }
 
     private func applyCompatibilityEnvironment(settings: BottleSettings, environment: inout [String: String]) {

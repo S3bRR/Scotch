@@ -42,7 +42,18 @@ struct ScotchCommandLine {
         case "install":
             return installCommandLink()
         case "uninstall":
+            if arguments.contains("--all") || arguments.contains("--app") {
+                return await uninstallEverything(
+                    includeBottles: !arguments.contains("--keep-bottles"),
+                    includeAppBundle: !arguments.contains("--keep-app")
+                )
+            }
             return uninstallCommandLink()
+        case "purge":
+            return await uninstallEverything(
+                includeBottles: !arguments.contains("--keep-bottles"),
+                includeAppBundle: !arguments.contains("--keep-app")
+            )
         case "remove":
             guard arguments.count >= 2 else { return fail("Missing bottle name.") }
             return await removeBottle(named: arguments[1], deleteFiles: false)
@@ -281,8 +292,8 @@ struct ScotchCommandLine {
 
     private func saveCatalog(_ catalog: BottleCatalog) -> Bool {
         do {
-            if !FileManager.default.fileExists(atPath: paths.containerDirectory.path(percentEncoded: false)) {
-                try FileManager.default.createDirectory(at: paths.containerDirectory, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: paths.applicationSupportDirectory.path(percentEncoded: false)) {
+                try FileManager.default.createDirectory(at: paths.applicationSupportDirectory, withIntermediateDirectories: true)
             }
 
             let data = try encoder.encode(catalog)
@@ -335,14 +346,40 @@ struct ScotchCommandLine {
         )
     }
 
+    private func uninstallEverything(includeBottles: Bool, includeAppBundle: Bool) async -> Int32 {
+        let services = makeServices()
+        let plan = await services.uninstallService.preview(
+            includeBottles: includeBottles,
+            includeAppBundle: includeAppBundle
+        )
+        do {
+            let result = try await services.uninstallService.perform(plan)
+            for path in result.removedPaths {
+                print("Removed \(path)")
+            }
+            for error in result.errors {
+                fputs("ScotchCmd: \(error)\n", stderr)
+            }
+            if result.errors.isEmpty {
+                print("Scotch data has been uninstalled.")
+                return 0
+            }
+            return 1
+        } catch {
+            return fail("Failed to uninstall: \(error.localizedDescription)")
+        }
+    }
+
     private func makeServices() -> (
         fileSystem: LocalFileSystem,
         runtimeService: WineRuntimeService,
-        repository: BottleRepository
+        repository: BottleRepository,
+        uninstallService: UninstallService
     ) {
         let fileSystem = LocalFileSystem()
         let plistStore = PlistStore()
         let logger = DefaultAppLogger(subsystem: paths.bundleIdentifier, category: "ScotchCmd")
+        LegacyDataMigrator(paths: paths, fileSystem: fileSystem, logger: logger).migrateIfNeeded()
         let logStore = LogStore(logsDirectory: paths.logsDirectory)
         let environmentAssembler = EnvironmentAssembler(paths: paths)
         let runtimeService = WineRuntimeService(
@@ -368,7 +405,15 @@ struct ScotchCommandLine {
             logger: logger,
             processRunner: processRunner
         )
-        return (fileSystem, runtimeService, repository)
+        let uninstallService = UninstallService(
+            paths: paths,
+            fileSystem: fileSystem,
+            logger: logger,
+            processRunner: processRunner,
+            bottleRepository: repository,
+            runtimeService: runtimeService
+        )
+        return (fileSystem, runtimeService, repository, uninstallService)
     }
 
     private func fail(_ message: String) -> Int32 {
@@ -385,6 +430,8 @@ struct ScotchCommandLine {
               ScotchCmd add <bottle-path>
               ScotchCmd install
               ScotchCmd uninstall
+              ScotchCmd uninstall --all [--keep-bottles] [--keep-app]
+              ScotchCmd purge [--keep-bottles] [--keep-app]
               ScotchCmd remove <bottle-name>
               ScotchCmd delete <bottle-name>
               ScotchCmd shellenv <bottle-name>

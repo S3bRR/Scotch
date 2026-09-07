@@ -19,12 +19,14 @@ public final class ScotchContainer: Sendable {
     public let rosettaService: RosettaServiceProtocol
     public let shortcutService: ShortcutService
     public let winetricksService: WinetricksServiceProtocol
+    public let uninstallService: UninstallServiceProtocol
 
     public init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.s3brr.Scotch") {
         let paths = AppPaths(bundleIdentifier: bundleIdentifier)
         let fileSystem = LocalFileSystem()
         let plistStore = PlistStore()
         let logger = DefaultAppLogger(subsystem: bundleIdentifier, category: "Scotch")
+        LegacyDataMigrator(paths: paths, fileSystem: fileSystem, logger: logger).migrateIfNeeded()
         let processRunner = DefaultProcessRunner()
         let logStore = LogStore(logsDirectory: paths.logsDirectory)
         let networkClient = DefaultNetworkClient()
@@ -73,10 +75,19 @@ public final class ScotchContainer: Sendable {
         self.settingsStore = AppSettingsStore(
             store: plistStore,
             settingsURL: paths.settingsURL,
-            defaultBottleDirectory: paths.defaultBottlesDirectory
+            defaultBottleDirectory: paths.defaultBottlesDirectory,
+            searchURLs: paths.settingsSearchURLs
         )
         self.rosettaService = RosettaService(processRunner: processRunner)
         self.shortcutService = ShortcutService()
+        self.uninstallService = UninstallService(
+            paths: paths,
+            fileSystem: fileSystem,
+            logger: logger,
+            processRunner: processRunner,
+            bottleRepository: self.bottleRepository,
+            runtimeService: runtimeService
+        )
     }
 
     public init(
@@ -93,7 +104,8 @@ public final class ScotchContainer: Sendable {
         settingsStore: AppSettingsStoreProtocol,
         rosettaService: RosettaServiceProtocol,
         shortcutService: ShortcutService,
-        winetricksService: WinetricksServiceProtocol
+        winetricksService: WinetricksServiceProtocol,
+        uninstallService: UninstallServiceProtocol
     ) {
         self.paths = paths
         self.logger = logger
@@ -109,6 +121,7 @@ public final class ScotchContainer: Sendable {
         self.rosettaService = rosettaService
         self.shortcutService = shortcutService
         self.winetricksService = winetricksService
+        self.uninstallService = uninstallService
     }
 
     /// Drains running bottles before app termination if the user opted into kill-on-quit.

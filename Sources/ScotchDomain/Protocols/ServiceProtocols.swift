@@ -92,3 +92,8 @@ public protocol WinetricksServiceProtocol: Sendable {
     func run(command: String, in bottle: BottleSummary, mode: WinetricksExecutionMode) async throws -> String
     func installCoreFonts(in bottle: BottleSummary, progress: (@Sendable (Double) -> Void)?) async throws
 }
+
+public protocol UninstallServiceProtocol: Sendable {
+    func preview(includeBottles: Bool, includeAppBundle: Bool) async -> UninstallPlan
+    func perform(_ plan: UninstallPlan) async throws -> UninstallResult
+}

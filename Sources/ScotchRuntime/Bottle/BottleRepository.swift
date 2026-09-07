@@ -107,6 +107,12 @@ public actor BottleRepository: BottleRepositoryProtocol {
         var working = summary
 
         _ = try await runtimeService.runWine(
+            arguments: ["wineboot", "--init"],
+            bottle: working,
+            environment: [:]
+        )
+
+        _ = try await runtimeService.runWine(
             arguments: ["winecfg", "-v", working.settings.wine.windowsVersion.rawValue],
             bottle: working,
             environment: [:]
@@ -512,23 +518,28 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     private func scanStartMenuPrograms(in bottleDirectory: URL) -> [URL] {
-        let startMenuRoots = [
+        var startMenuRoots = [
             bottleDirectory
                 .appending(path: "drive_c")
                 .appending(path: "ProgramData")
                 .appending(path: "Microsoft")
                 .appending(path: "Windows")
-                .appending(path: "Start Menu"),
-            bottleDirectory
-                .appending(path: "drive_c")
-                .appending(path: "users")
-                .appending(path: "crossover")
-                .appending(path: "AppData")
-                .appending(path: "Roaming")
-                .appending(path: "Microsoft")
-                .appending(path: "Windows")
                 .appending(path: "Start Menu")
         ]
+
+        let usersDirectory = bottleDirectory.appending(path: "drive_c/users")
+        if let users = try? fileSystem.contentsOfDirectory(at: usersDirectory) {
+            for userDirectory in users {
+                startMenuRoots.append(
+                    userDirectory
+                        .appending(path: "AppData")
+                        .appending(path: "Roaming")
+                        .appending(path: "Microsoft")
+                        .appending(path: "Windows")
+                        .appending(path: "Start Menu")
+                )
+            }
+        }
 
         var discovered: [URL] = []
         var seen = Set<String>()
@@ -568,24 +579,30 @@ public actor BottleRepository: BottleRepositoryProtocol {
 
     private func loadCatalog() async -> BottleCatalog {
         let primaryURL = paths.bottleCatalogURL
-        let alternateURL = paths.alternateBottleCatalogURL
+        var recovered: (catalog: BottleCatalog, source: URL)?
 
-        let primaryCatalog = try? await plistStore.read(BottleCatalog.self, from: primaryURL)
-        let alternateCatalog = primaryURL == alternateURL ? nil : (try? await plistStore.read(BottleCatalog.self, from: alternateURL))
-
-        if let primaryCatalog {
-            if primaryCatalog.bottlePaths.isEmpty, let alternateCatalog, !alternateCatalog.bottlePaths.isEmpty {
-                recordMigrationEvent("Loaded fallback catalog from \(alternateURL.lastPathComponent) because primary catalog was empty")
-                try? await plistStore.write(alternateCatalog, to: primaryURL)
-                return alternateCatalog
+        for url in paths.catalogSearchURLs {
+            guard let catalog = try? await plistStore.read(BottleCatalog.self, from: url) else { continue }
+            if url == primaryURL {
+                if catalog.bottlePaths.isEmpty {
+                    recovered = recovered ?? (catalog, url)
+                    continue
+                }
+                return catalog
             }
-            return primaryCatalog
+            if !catalog.bottlePaths.isEmpty {
+                recordMigrationEvent("Recovered catalog from \(url.path(percentEncoded: false))")
+                try? await plistStore.write(catalog, to: primaryURL)
+                return catalog
+            }
+            if recovered == nil {
+                recovered = (catalog, url)
+            }
         }
 
-        if let alternateCatalog {
-            recordMigrationEvent("Recovered catalog from \(alternateURL.lastPathComponent)")
-            try? await plistStore.write(alternateCatalog, to: primaryURL)
-            return alternateCatalog
+        if let recovered {
+            try? await plistStore.write(recovered.catalog, to: primaryURL)
+            return recovered.catalog
         }
 
         let discovered = discoverCatalogFromDefaultDirectory()

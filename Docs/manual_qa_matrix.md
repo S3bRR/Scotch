@@ -28,5 +28,7 @@ Manual verification matrix for release-candidate flows. Update per release.
 | Rename bottle from sidebar | `.alert` with text field; renames on Enter. |
 | Delete bottle from sidebar | `.confirmationDialog` with destructive button; cancel does nothing. |
 | Install Command Line Tool | Admin prompt appears; success or error surfaces as a toast. |
+| Settings → Uninstall Scotch | Preview lists runtime, logs, caches, CLI, leftover folders; optional bottle/app removal; after confirm those paths are gone and the app quits. |
+| `scotch uninstall --all` | Same cleanup from the CLI without leaving `~/Library/Application Support/com.s3brr.Scotch` or `/usr/local/bin/scotch`. |
 | First-run Winetricks "Run in Terminal" | Tahoe prompts for Automation permission against Terminal — accept once. |
 | Steam install on a fresh bottle | Installer downloads and runs; transport failure surfaces as a status message rather than a hang. |

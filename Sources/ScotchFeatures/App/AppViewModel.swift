@@ -277,6 +277,7 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func openLogsFolder() {
+        try? FileManager.default.createDirectory(at: container.paths.logsDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: container.paths.logsDirectory.path(percentEncoded: false))
     }
 
@@ -300,11 +301,15 @@ public final class AppViewModel: ObservableObject {
             return
         }
 
-        let d3dmPath = URL(fileURLWithPath: cacheRoot).appending(path: "d3dm")
+        let cacheURL = URL(fileURLWithPath: cacheRoot)
+        let cachePaths = [
+            cacheURL.appending(path: "d3dm"),
+            cacheURL.appending(path: "dxmt")
+        ]
         do {
             try await Task.detached(priority: .utility) {
-                if FileManager.default.fileExists(atPath: d3dmPath.path(percentEncoded: false)) {
-                    try FileManager.default.removeItem(at: d3dmPath)
+                for path in cachePaths where FileManager.default.fileExists(atPath: path.path(percentEncoded: false)) {
+                    try FileManager.default.removeItem(at: path)
                 }
             }.value
             toastMessage = "Shader cache cleared."

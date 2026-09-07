@@ -58,7 +58,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         static let dxmt = RuntimeAssetRequirement(
             displayName: "DXMT",
             repo: "3Shain/dxmt",
-            versionTag: "v0.74",
+            versionTag: "v0.80",
             assetNamePatterns: ["dxmt-", "builtin.tar"]
         )
     }
@@ -153,20 +153,22 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     public func installAll(from archives: DownloadedRuntimeArchives) async throws -> (RuntimeManifest, [OverlayInstallResult]) {
         try ensureDiskSpace(requiredBytes: archives.runtimeReleases.wine.size + archives.runtimeReleases.dxvk.size + archives.runtimeReleases.dxmt.size)
 
+        try fileSystem.createDirectory(at: paths.applicationSupportDirectory)
+
+        let libraries = paths.librariesDirectory
         let backupURL = paths.applicationSupportDirectory
-            .deletingLastPathComponent()
-            .appending(path: "\(paths.bundleIdentifier)-runtime-backup-\(UUID().uuidString)")
-        let hadExistingInstall = fileSystem.fileExists(at: paths.applicationSupportDirectory)
+            .appending(path: "Libraries.backup-\(UUID().uuidString)")
+        let hadExistingInstall = fileSystem.fileExists(at: libraries)
 
         if hadExistingInstall {
-            try fileSystem.moveItem(at: paths.applicationSupportDirectory, to: backupURL)
+            try fileSystem.moveItem(at: libraries, to: backupURL)
         }
 
         do {
-            try fileSystem.createDirectory(at: paths.librariesDirectory)
+            try fileSystem.createDirectory(at: libraries)
             try await installWine(from: archives.wineArchive)
-            try await installTranslationLibrary(componentName: "DXVK", archive: archives.dxvkArchive, destination: paths.librariesDirectory.appending(path: "DXVK"))
-            try await installTranslationLibrary(componentName: "DXMT", archive: archives.dxmtArchive, destination: paths.librariesDirectory.appending(path: "DXMT"))
+            try await installTranslationLibrary(componentName: "DXVK", archive: archives.dxvkArchive, destination: libraries.appending(path: "DXVK"))
+            try await installTranslationLibrary(componentName: "DXMT", archive: archives.dxmtArchive, destination: libraries.appending(path: "DXMT"))
 
             let overlayResults = try await [
                 installOverlay(component: .winemacOpenGLPatch),
@@ -192,13 +194,14 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             if hadExistingInstall, fileSystem.fileExists(at: backupURL) {
                 try? fileSystem.removeItem(at: backupURL)
             }
+            cleanupTransientInstallFiles()
             return (manifest, overlayResults)
         } catch {
-            if fileSystem.fileExists(at: paths.applicationSupportDirectory) {
-                try? fileSystem.removeItem(at: paths.applicationSupportDirectory)
+            if fileSystem.fileExists(at: libraries) {
+                try? fileSystem.removeItem(at: libraries)
             }
             if hadExistingInstall, fileSystem.fileExists(at: backupURL) {
-                try? fileSystem.moveItem(at: backupURL, to: paths.applicationSupportDirectory)
+                try? fileSystem.moveItem(at: backupURL, to: libraries)
             }
             throw error
         }
@@ -627,11 +630,40 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     private var wineLauncherScript: String {
         """
         #!/bin/bash
-        HERE="$(cd "$(dirname "$0")" && pwd)"; LIBS="$HERE/../../.."
-        [ -d "$LIBS/D3DMetal" ] && export DYLD_FRAMEWORK_PATH="$LIBS/D3DMetal:${DYLD_FRAMEWORK_PATH:-}" DYLD_LIBRARY_PATH="$LIBS/D3DMetal:${DYLD_LIBRARY_PATH:-}"
-        if [ -n "$SCOTCH_GPU_SPOOF_LIB" ] && [ -f "$SCOTCH_GPU_SPOOF_LIB" ]; then export CX_LIBVULKAN="$SCOTCH_GPU_SPOOF_LIB" SCOTCH_REAL_MOLTENVK_PATH="${SCOTCH_REAL_MOLTENVK_PATH:-$LIBS/Wine/lib/libMoltenVK.dylib}" DYLD_LIBRARY_PATH="$(dirname "$SCOTCH_GPU_SPOOF_LIB"):${DYLD_LIBRARY_PATH:-}"; fi
+        HERE="$(cd "$(dirname "$0")" && pwd)"
+        LIBS="$(cd "$HERE/../../.." && pwd)"
+        if [ -n "${SCOTCH_LAUNCH_ENV:-}" ] && [ -f "$SCOTCH_LAUNCH_ENV" ]; then
+          set -a
+          # shellcheck disable=SC1090
+          . "$SCOTCH_LAUNCH_ENV"
+          set +a
+        fi
+        if [ -d "$LIBS/D3DMetal" ]; then
+          export DYLD_FRAMEWORK_PATH="$LIBS/D3DMetal${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
+          export DYLD_LIBRARY_PATH="$LIBS/D3DMetal${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        fi
+        if [ -n "${SCOTCH_GPU_SPOOF_LIB:-}" ] && [ -f "$SCOTCH_GPU_SPOOF_LIB" ]; then
+          export CX_LIBVULKAN="$SCOTCH_GPU_SPOOF_LIB"
+          export SCOTCH_REAL_MOLTENVK_PATH="${SCOTCH_REAL_MOLTENVK_PATH:-$LIBS/Wine/lib/libMoltenVK.dylib}"
+          export DYLD_LIBRARY_PATH="$(dirname "$SCOTCH_GPU_SPOOF_LIB")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        fi
+        export PATH="$LIBS/Wine/bin:${PATH:-/usr/bin:/bin}"
+        export WINE="${WINE:-$LIBS/Wine/bin/wine}"
         exec "$LIBS/Wine/bin/wine" "$@"
         """
+    }
+
+    private func cleanupTransientInstallFiles() {
+        let transients = [
+            FileManager.default.temporaryDirectory.appending(path: "ScotchRuntimeDownloads"),
+            FileManager.default.temporaryDirectory.appending(path: "ScotchOverlays"),
+            paths.applicationSupportDirectory.appending(path: "wine-scratch"),
+            paths.applicationSupportDirectory.appending(path: "dxvk-scratch"),
+            paths.applicationSupportDirectory.appending(path: "dxmt-scratch")
+        ]
+        for url in transients where fileSystem.fileExists(at: url) {
+            try? fileSystem.removeItem(at: url)
+        }
     }
 
     private var wineInfoPlist: String {

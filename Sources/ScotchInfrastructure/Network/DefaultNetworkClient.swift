@@ -1,4 +1,5 @@
 import Foundation
+import ScotchDomain
 
 /// `@unchecked Sendable`: the underlying `URLSession` is thread-safe; all stored properties
 /// are immutable after init.
@@ -8,7 +9,7 @@ public final class DefaultNetworkClient: NetworkClient, @unchecked Sendable {
     private let retry: RetryPolicy
 
     public init(
-        userAgent: String = "Scotch",
+        userAgent: String = ScotchAppInfo.userAgent,
         defaultRequestTimeout: TimeInterval = 30,
         defaultResourceTimeout: TimeInterval = 600,
         retry: RetryPolicy = .default
@@ -23,7 +24,7 @@ public final class DefaultNetworkClient: NetworkClient, @unchecked Sendable {
     }
 
     /// Test-only initializer that accepts a pre-built `URLSession` (e.g. one wired to a stub URLProtocol).
-    public init(session: URLSession, userAgent: String = "Scotch", retry: RetryPolicy = .default) {
+    public init(session: URLSession, userAgent: String = ScotchAppInfo.userAgent, retry: RetryPolicy = .default) {
         self.session = session
         self.userAgent = userAgent
         self.retry = retry

@@ -24,14 +24,22 @@ enum CLIInstallError: LocalizedError {
 enum CommandLineInstaller {
     static let symlinkPath = "/usr/local/bin/scotch"
 
+    static func uninstall() async -> Result<Void, CLIInstallError> {
+        let command = "rm -f \(shellQuoted(symlinkPath))"
+        return await runPrivileged(command)
+    }
+
     static func install() async -> Result<Void, CLIInstallError> {
         guard let sourceURL = locateCmdExecutable() else {
             return .failure(.missingExecutable)
         }
 
         let command = "mkdir -p /usr/local/bin && ln -fs \(shellQuoted(sourceURL.path(percentEncoded: false))) \(shellQuoted(symlinkPath))"
-        let escapedCommand = appleScriptEscaped(command)
+        return await runPrivileged(command)
+    }
 
+    private static func runPrivileged(_ command: String) async -> Result<Void, CLIInstallError> {
+        let escapedCommand = appleScriptEscaped(command)
         let script = """
         do shell script "\(escapedCommand)" with administrator privileges
         """

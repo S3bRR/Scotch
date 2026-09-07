@@ -16,6 +16,18 @@ This is a personal project. Use at your own risk.
 
 Scotch will download Wine, DXVK, DXMT, and the other backends automatically on first run (~500 MB).
 
+## Uninstall
+
+Settings → Uninstall Scotch removes everything Scotch created:
+
+- `~/Library/Application Support/com.s3brr.Scotch/` (Wine runtime, default bottles, settings, logs, caches)
+- leftover `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` from older versions
+- `/usr/local/bin/scotch`
+- shader caches and temporary downloads
+- optionally every bottle prefix and `Scotch.app` itself
+
+From a terminal: `scotch uninstall --all` (add `--keep-bottles` to leave prefixes).
+
 ## What Scotch is built from
 
 Scotch is a native SwiftUI shell around other people's hard work. The app itself handles bottle management, the setup wizard, config, launch orchestration, and a bit of binary-patching — the compatibility comes from these upstream projects:
@@ -24,7 +36,7 @@ Scotch is a native SwiftUI shell around other people's hard work. The app itself
 |---|---|---|
 | Core compatibility layer | **[Wine Staging 11.6](https://www.winehq.org/)** (via [Gcenx's macOS builds](https://github.com/Gcenx/macOS_Wine_builds)) | Translates Win32 API calls to macOS equivalents. Everything else on this list sits on top of Wine. |
 | DirectX 9/10/11 → Vulkan → Metal | **[DXVK 1.10.3](https://github.com/Gcenx/DXVK-macOS)** (Gcenx's macOS port of [doitsujin/dxvk](https://github.com/doitsujin/dxvk)) + **[MoltenVK 1.4.1](https://github.com/KhronosGroup/MoltenVK)** | Widest compatibility path. Default backend for new bottles. |
-| DirectX 10/11 → Metal (native) | **[DXMT 0.74](https://github.com/3Shain/dxmt)** by 3Shain | Native-Metal alternative for D3D11 titles. Better Apple Silicon perf than DXVK for the games it supports. |
+| DirectX 10/11 → Metal (native) | **[DXMT 0.80](https://github.com/3Shain/dxmt)** by 3Shain | Native-Metal alternative for D3D11 titles. Better Apple Silicon perf than DXVK for the games it supports. |
 | DirectX 11/12 → Metal (native) | **[D3DMetal 3.0](https://developer.apple.com/games/game-porting-toolkit/)** from Apple's Game Porting Toolkit 3 | Apple's own DX11/12 translation layer. Required for DX12 titles. |
 | OpenGL 4.6 → Vulkan → Metal | **[Mesa Zink 24.3.4](https://docs.mesa3d.org/drivers/zink.html)** (Windows build by [pal1000](https://github.com/pal1000/mesa-dist-win)) | Works around macOS 26's OpenGL deprecation by sidestepping Apple's CGL entirely. |
 | UI framework | **SwiftUI** | Native macOS interface. |
@@ -41,7 +53,8 @@ Each translation backend is a separate option in the bottle config picker. You p
 - **Start-menu discovery** that auto-pins `.lnk`-discovered programs per bottle.
 - **Per-program settings** (locale, arguments, env vars) persisted alongside the bottle.
 - **QuickLook** thumbnails for `.exe` files in Finder.
-- **CLI tool** (`scotch`) for `list`/`run`/`add`/`remove`/`shellenv` operations.
+- **CLI tool** (`scotch`) for `list`/`run`/`add`/`remove`/`shellenv` operations, plus `uninstall --all` to purge the app.
+- **Clean uninstall** from Settings: one button removes the runtime, settings, logs, caches, CLI symlink, leftover folders, and optionally every bottle and `Scotch.app`.
 
 ## System requirements
 
@@ -56,7 +69,7 @@ Each translation backend is a separate option in the bottle config picker. You p
 |-----------|---------|--------|
 | Wine | 11.6 | Gcenx/macOS_Wine_builds (latest) |
 | DXVK | 1.10.3 | Gcenx/DXVK-macOS (latest) |
-| DXMT | 0.74 | 3Shain/dxmt (latest) |
+| DXMT | 0.80 | 3Shain/dxmt |
 | D3DMetal | 3.0 | Apple GPTK 3 (Scotch overlay) |
 | Mesa Zink | 24.3.4 | pal1000/mesa-dist-win, repackaged in Scotch `zink-1.0` |
 | MoltenVK | 1.4.1 | Bundled with Gcenx Wine |
@@ -66,14 +79,16 @@ Other combinations may work but are unsupported.
 
 ## How it works
 
-1. On first run, Scotch downloads Wine Staging 11.6 + DXVK + DXMT from their upstream GitHub releases.
+1. On first run, Scotch downloads pinned Wine Staging 11.6, DXVK 1.10.3, and DXMT 0.80 from their upstream GitHub releases. Wine stays on 11.6 because the OpenGL `winemac.so` overlay is a byte patch for that build.
 2. It downloads three Scotch-hosted overlays on top of that:
    - A pre-patched `winemac.so` that enables OpenGL 3.2+ Core Profile context creation (a byte-level patch that works around a hardcoded rejection in Wine 11.6).
    - Apple's D3DMetal 3.0 framework (redistributed from GPTK 3 for DX11/12 support).
    - Mesa Zink for OpenGL-over-Vulkan.
 3. It builds a `Wine.app` launcher bundle so Wine's child processes get a proper macOS foreground activation policy — without this, Wine's windows are created invisible offscreen.
-4. When you create a bottle, Scotch creates a Wine prefix and runs `wineboot --init` to set up the Windows environment.
-5. When you run an `.exe`, Scotch copies the backend-specific DLLs (DXVK / DXMT / D3DMetal / Zink) into the bottle's `system32` and `syswow64`, sets the right `WINEDLLOVERRIDES`, and launches Wine via the `Wine.app` wrapper.
+4. When you create a bottle, Scotch creates a Wine prefix with `wineboot --init`, then `winecfg` for the selected Windows version, then winetricks corefonts.
+5. When you run an `.exe`, Scotch copies the backend-specific DLLs (DXVK / DXMT / D3DMetal / Zink) into the bottle's `system32` and `syswow64`, sets the right `WINEDLLOVERRIDES`, and launches Wine via `open -a Wine.app --env …` so the bottle's `WINEPREFIX` actually reaches the Wine process.
+
+All Scotch data lives under `~/Library/Application Support/com.s3brr.Scotch/` (runtime, bottles, settings, logs, winetricks cache). Older installs that used `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` are migrated on launch and removed by Uninstall.
 
 ## Not supported
 

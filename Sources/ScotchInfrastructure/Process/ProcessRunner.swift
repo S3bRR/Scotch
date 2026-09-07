@@ -72,7 +72,7 @@ public final class DefaultProcessRunner: ProcessRunner, @unchecked Sendable {
         process.executableURL = specification.executableURL
         process.arguments = specification.arguments
         process.currentDirectoryURL = specification.currentDirectoryURL ?? specification.executableURL.deletingLastPathComponent()
-        process.environment = specification.environment
+        process.environment = Self.mergedEnvironment(specification.environment)
         process.qualityOfService = .userInitiated
 
         let stdout = Pipe()
@@ -171,6 +171,12 @@ public final class DefaultProcessRunner: ProcessRunner, @unchecked Sendable {
                 kill(process.processIdentifier, SIGKILL)
             }
         }
+    }
+
+    private static func mergedEnvironment(_ overrides: [String: String]) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment.merge(overrides, uniquingKeysWith: { _, new in new })
+        return environment
     }
 
     public func captureProcess(_ specification: ProcessSpecification, outputFileHandle: FileHandle?) async throws -> String {
