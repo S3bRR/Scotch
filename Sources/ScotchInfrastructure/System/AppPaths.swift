@@ -31,6 +31,17 @@ public struct AppPaths: Sendable {
         applicationSupportDirectory.appending(path: AppSettings.fileName)
     }
 
+    public var installLedgerURL: URL {
+        applicationSupportDirectory.appending(path: InstallLedger.fileName)
+    }
+
+    public var thumbnailContainerDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library")
+            .appending(path: "Containers")
+            .appending(path: "\(bundleIdentifier).Thumbnail")
+    }
+
     public var defaultBottlesDirectory: URL {
         applicationSupportDirectory.appending(path: "Bottles")
     }

@@ -9,6 +9,7 @@ public actor UninstallService: UninstallServiceProtocol {
     private let processRunner: ProcessRunner
     private let bottleRepository: BottleRepositoryProtocol
     private let runtimeService: WineRuntimeServiceProtocol
+    private let installLedger: InstallLedgerProtocol
 
     public init(
         paths: AppPaths,
@@ -16,7 +17,8 @@ public actor UninstallService: UninstallServiceProtocol {
         logger: AppLogger,
         processRunner: ProcessRunner,
         bottleRepository: BottleRepositoryProtocol,
-        runtimeService: WineRuntimeServiceProtocol
+        runtimeService: WineRuntimeServiceProtocol,
+        installLedger: InstallLedgerProtocol
     ) {
         self.paths = paths
         self.fileSystem = fileSystem
@@ -24,6 +26,7 @@ public actor UninstallService: UninstallServiceProtocol {
         self.processRunner = processRunner
         self.bottleRepository = bottleRepository
         self.runtimeService = runtimeService
+        self.installLedger = installLedger
     }
 
     public func preview(includeBottles: Bool, includeAppBundle: Bool) async -> UninstallPlan {
@@ -33,6 +36,13 @@ public actor UninstallService: UninstallServiceProtocol {
         targets.append(contentsOf: await temporaryTargets())
         targets.append(cliTarget())
         targets.append(contentsOf: preferenceTargets())
+        targets.append(target(at: paths.thumbnailContainerDirectory, kind: .leftover))
+
+        for entry in await installLedger.entries() {
+            if entry.kind == .bottle, !includeBottles { continue }
+            if entry.kind == .appBundle, !includeAppBundle { continue }
+            targets.append(target(at: URL(fileURLWithPath: entry.path), kind: entry.kind))
+        }
 
         if includeBottles {
             let bottles = await bottleRepository.loadBottles()

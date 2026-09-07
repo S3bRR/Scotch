@@ -20,6 +20,7 @@ public final class ScotchContainer: Sendable {
     public let shortcutService: ShortcutService
     public let winetricksService: WinetricksServiceProtocol
     public let uninstallService: UninstallServiceProtocol
+    public let installLedger: InstallLedgerProtocol
 
     public init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.s3brr.Scotch") {
         let paths = AppPaths(bundleIdentifier: bundleIdentifier)
@@ -80,13 +81,16 @@ public final class ScotchContainer: Sendable {
         )
         self.rosettaService = RosettaService(processRunner: processRunner)
         self.shortcutService = ShortcutService()
+        let installLedger = InstallLedgerStore(paths: paths, store: plistStore)
+        self.installLedger = installLedger
         self.uninstallService = UninstallService(
             paths: paths,
             fileSystem: fileSystem,
             logger: logger,
             processRunner: processRunner,
             bottleRepository: self.bottleRepository,
-            runtimeService: runtimeService
+            runtimeService: runtimeService,
+            installLedger: installLedger
         )
     }
 
@@ -105,7 +109,8 @@ public final class ScotchContainer: Sendable {
         rosettaService: RosettaServiceProtocol,
         shortcutService: ShortcutService,
         winetricksService: WinetricksServiceProtocol,
-        uninstallService: UninstallServiceProtocol
+        uninstallService: UninstallServiceProtocol,
+        installLedger: InstallLedgerProtocol
     ) {
         self.paths = paths
         self.logger = logger
@@ -122,6 +127,7 @@ public final class ScotchContainer: Sendable {
         self.shortcutService = shortcutService
         self.winetricksService = winetricksService
         self.uninstallService = uninstallService
+        self.installLedger = installLedger
     }
 
     /// Drains running bottles before app termination if the user opted into kill-on-quit.

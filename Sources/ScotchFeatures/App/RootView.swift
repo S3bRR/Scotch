@@ -107,6 +107,15 @@ public struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .scotchCLIInstallResult)) { notification in
             if let message = notification.object as? String {
                 viewModel.toastMessage = message
+                if message.localizedCaseInsensitiveContains("Installed") {
+                    Task {
+                        await viewModel.container.installLedger.record(
+                            path: URL(fileURLWithPath: "/usr/local/bin/scotch"),
+                            kind: .cli,
+                            note: "CLI symlink"
+                        )
+                    }
+                }
             }
         }
         .overlay(alignment: .bottom) {

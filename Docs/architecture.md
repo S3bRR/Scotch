@@ -23,7 +23,7 @@ All writable state lives under `~/Library/Application Support/com.s3brr.Scotch/`
 
 Legacy `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` are read on first launch after 1.1.0 and copied into Application Support. Runtime reinstall replaces only `Libraries/`, never bottles or settings.
 
-Uninstall (`Settings → Uninstall Scotch`, or `scotch uninstall --all`) kills Wine, then deletes the Application Support tree, leftover Containers/Logs folders, caches, CLI symlink, GPU spoof log, and optionally bottles plus `Scotch.app`.
+Uninstall (`Settings → Uninstall Scotch`, or `scotch uninstall --all`) kills Wine, then deletes the Application Support tree, leftover Containers/Logs folders, caches, CLI symlink, GPU spoof log, recorded shortcuts, and optionally bottles plus `Scotch.app`. Extra paths (custom bottle folders, desktop shortcuts, CLI) are appended to `InstallLedger.plist` as they are created. See `Docs/install_locations.md`.
 
 ## Compatibility strategy
 - Keep bottle metadata shape stable (`Metadata.plist`).

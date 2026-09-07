@@ -96,7 +96,7 @@ public struct SettingsPanelView: View {
                 } header: {
                     Text("Uninstall")
                 } footer: {
-                    Text("Removes Wine, translation backends, settings, logs, caches, the `scotch` command, leftover Containers/Logs folders, and optionally every bottle. This cannot be undone.")
+                    Text("Removes Wine, translation backends, settings, logs, caches, the `scotch` command, leftover folders, recorded shortcuts, and optionally every bottle. Extra paths are stored in InstallLedger.plist as Scotch creates them.")
                 }
 
                 if let status = viewModel.statusMessage {

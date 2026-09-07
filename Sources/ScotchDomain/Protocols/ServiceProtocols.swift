@@ -98,3 +98,15 @@ public protocol UninstallServiceProtocol: Sendable {
     func preview(includeBottles: Bool, includeAppBundle: Bool) async -> UninstallPlan
     func perform(_ plan: UninstallPlan) async throws -> UninstallResult
 }
+
+public protocol InstallLedgerProtocol: Sendable {
+    func record(path: URL, kind: UninstallTarget.Kind, note: String?) async
+    func entries() async -> [InstallLedgerEntry]
+    func seedKnownRoots() async
+}
+
+public extension InstallLedgerProtocol {
+    func record(path: URL, kind: UninstallTarget.Kind) async {
+        await record(path: path, kind: kind, note: nil)
+    }
+}

@@ -38,9 +38,9 @@ struct ScotchCommandLine {
             return await createBottle(named: arguments[1])
         case "add":
             guard arguments.count >= 2 else { return fail("Missing bottle path.") }
-            return addBottle(path: arguments[1])
+            return await addBottle(path: arguments[1])
         case "install":
-            return installCommandLink()
+            return await installCommandLink()
         case "uninstall":
             if arguments.contains("--all") || arguments.contains("--app") {
                 return await uninstallEverything(
@@ -105,7 +105,7 @@ struct ScotchCommandLine {
         return 0
     }
 
-    private func addBottle(path: String) -> Int32 {
+    private func addBottle(path: String) async -> Int32 {
         let bottleURL = URL(fileURLWithPath: path)
         let metadata = bottleURL.appending(path: BottleSettings.metadataFileName)
         guard FileManager.default.fileExists(atPath: metadata.path(percentEncoded: false)) else {
@@ -125,6 +125,11 @@ struct ScotchCommandLine {
         }
 
         print("Added bottle: \(normalizedPath)")
+        await makeServices().installLedger.record(
+            path: bottleURL,
+            kind: .bottle,
+            note: "CLI added bottle"
+        )
         return 0
     }
 
@@ -144,6 +149,11 @@ struct ScotchCommandLine {
                 let configured = try await services.repository.setupWineEnvironment(summary, progress: nil)
                 let final = try await services.repository.installBottleCoreFonts(configured, progress: nil)
                 print("Created bottle '\(name)' at \(final.directoryURL.path(percentEncoded: false)).")
+                await services.installLedger.record(
+                    path: final.directoryURL,
+                    kind: .bottle,
+                    note: "CLI bottle \(name)"
+                )
                 return 0
             } catch {
                 try? await services.repository.deleteBottle(id: summary.id, removeFiles: true)
@@ -157,7 +167,7 @@ struct ScotchCommandLine {
         }
     }
 
-    private func installCommandLink() -> Int32 {
+    private func installCommandLink() async -> Int32 {
         guard let executableURL = Bundle.main.executableURL else {
             return fail("Unable to resolve executable path.")
         }
@@ -172,6 +182,7 @@ struct ScotchCommandLine {
                 withDestinationURL: executableURL
             )
             print("Installed command link at \(targetURL.path(percentEncoded: false)).")
+            await makeServices().installLedger.record(path: targetURL, kind: .cli, note: "CLI symlink")
             return 0
         } catch {
             return fail("Failed to install command link: \(error.localizedDescription)")
@@ -374,7 +385,8 @@ struct ScotchCommandLine {
         fileSystem: LocalFileSystem,
         runtimeService: WineRuntimeService,
         repository: BottleRepository,
-        uninstallService: UninstallService
+        uninstallService: UninstallService,
+        installLedger: InstallLedgerStore
     ) {
         let fileSystem = LocalFileSystem()
         let plistStore = PlistStore()
@@ -405,15 +417,17 @@ struct ScotchCommandLine {
             logger: logger,
             processRunner: processRunner
         )
+        let installLedger = InstallLedgerStore(paths: paths, store: plistStore)
         let uninstallService = UninstallService(
             paths: paths,
             fileSystem: fileSystem,
             logger: logger,
             processRunner: processRunner,
             bottleRepository: repository,
-            runtimeService: runtimeService
+            runtimeService: runtimeService,
+            installLedger: installLedger
         )
-        return (fileSystem, runtimeService, repository, uninstallService)
+        return (fileSystem, runtimeService, repository, uninstallService, installLedger)
     }
 
     private func fail(_ message: String) -> Int32 {

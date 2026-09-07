@@ -67,6 +67,11 @@ public final class BottleDetailViewModel: ObservableObject {
 
         let downloadsDir = FileManager.default.temporaryDirectory.appending(path: "ScotchSteamInstall/\(bottle.id.rawValue)")
         try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
+        await container.installLedger.record(
+            path: downloadsDir.deletingLastPathComponent(),
+            kind: .temporary,
+            note: "Steam installer temp"
+        )
         let setupURL = downloadsDir.appending(path: "SteamSetup.exe")
 
         guard let remoteURL = URL(string: "https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe") else {
@@ -348,6 +353,11 @@ public final class BottleDetailViewModel: ObservableObject {
                 in: bottle,
                 destinationAppURL: destination,
                 launchCommand: launchCommand
+            )
+            await container.installLedger.record(
+                path: destination,
+                kind: .shortcut,
+                note: "Shortcut for \(program.displayName)"
             )
             NSWorkspace.shared.activateFileViewerSelecting([destination])
             statusMessage = "Shortcut created for \(program.displayName)."

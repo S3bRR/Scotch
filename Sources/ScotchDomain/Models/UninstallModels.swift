@@ -12,6 +12,7 @@ public struct UninstallTarget: Equatable, Sendable, Identifiable {
         case appBundle
         case preferences
         case leftover
+        case shortcut
     }
 
     public var path: String

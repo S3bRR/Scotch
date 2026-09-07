@@ -46,8 +46,16 @@ public final class AppViewModel: ObservableObject {
             runtimeUpdateVersion = nil
             overlayDrifts = []
         }
+        await container.installLedger.seedKnownRoots()
         await container.logStore.pruneLogs(olderThan: 7)
         await refreshBottles()
+        for bottle in bottles {
+            await container.installLedger.record(
+                path: bottle.directoryURL,
+                kind: .bottle,
+                note: "Bottle \(bottle.settings.info.name)"
+            )
+        }
 
         let rosettaInstalled = await container.rosettaService.isInstalled()
         let runtimeInstalled = await container.runtimeInstaller.isRuntimeInstalled()
@@ -113,6 +121,11 @@ public final class AppViewModel: ObservableObject {
             }
             bottles.sort { $0.settings.info.name.lowercased() < $1.settings.info.name.lowercased() }
             selectedBottleID = final.id
+            await container.installLedger.record(
+                path: final.directoryURL,
+                kind: .bottle,
+                note: "Bottle \(final.settings.info.name)"
+            )
         } catch {
             await rollbackFailedBottleCreation(inFlight)
             markBottleCreationFailed(id: inFlight.id, message: error.localizedDescription)
@@ -160,6 +173,11 @@ public final class AppViewModel: ObservableObject {
             let summary = try await container.bottleRepository.addExistingBottle(at: directoryURL)
             await refreshBottles()
             selectedBottleID = summary.id
+            await container.installLedger.record(
+                path: summary.directoryURL,
+                kind: .bottle,
+                note: "Imported bottle \(summary.settings.info.name)"
+            )
             toastMessage = "Imported \(summary.settings.info.name)."
         } catch {
             toastMessage = "Failed to open bottle: \(error.localizedDescription)"
@@ -193,6 +211,11 @@ public final class AppViewModel: ObservableObject {
             let moved = try await container.bottleRepository.moveBottle(id: bottle.id, destinationParent: destinationParent)
             await refreshBottles()
             selectedBottleID = moved.id
+            await container.installLedger.record(
+                path: moved.directoryURL,
+                kind: .bottle,
+                note: "Moved bottle \(moved.settings.info.name)"
+            )
             toastMessage = "Moved \(moved.settings.info.name)."
         } catch {
             toastMessage = "Failed to move bottle: \(error.localizedDescription)"
@@ -227,6 +250,12 @@ public final class AppViewModel: ObservableObject {
     public func saveSettings(_ settings: AppSettings) async {
         appSettings = settings
         await container.settingsStore.saveSettings(settings)
+        let bottleRoot = URL(fileURLWithPath: settings.defaultBottleDirectoryPath)
+        await container.installLedger.record(
+            path: bottleRoot,
+            kind: .bottle,
+            note: "Default bottle location"
+        )
     }
 
     public func installRuntimeDependencies() async {
@@ -258,6 +287,7 @@ public final class AppViewModel: ObservableObject {
             overlayDrifts = await container.runtimeInstaller.overlayDrifts()
             showSetupSheet = false
             setupStage = .ready
+            await container.installLedger.seedKnownRoots()
             toastMessage = "Runtime installation complete."
         } catch {
             setupStage = .failed(error.localizedDescription)
