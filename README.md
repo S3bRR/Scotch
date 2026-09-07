@@ -26,7 +26,7 @@ Settings → Uninstall Scotch removes everything Scotch created:
 - shader caches and temporary downloads
 - optionally every bottle prefix and `Scotch.app` itself
 
-From a terminal: `scotch uninstall --all` (add `--keep-bottles` to leave prefixes).
+From a terminal: `scotch setup` installs the Wine runtime without the GUI. `scotch uninstall --all` removes everything (add `--keep-bottles` to leave prefixes).
 
 ## What Scotch is built from
 

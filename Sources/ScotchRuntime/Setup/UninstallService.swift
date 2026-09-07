@@ -93,7 +93,13 @@ public actor UninstallService: UninstallServiceProtocol {
                     result.skippedPaths.append(item.path)
                 }
             } catch {
-                result.errors.append("\(item.path): \(error.localizedDescription)")
+                let message = error.localizedDescription
+                if item.kind == .leftover, message.localizedCaseInsensitiveContains("permission") {
+                    logger.warning("Skipped \(item.path): \(message)")
+                    result.skippedPaths.append(item.path)
+                } else {
+                    result.errors.append("\(item.path): \(message)")
+                }
             }
         }
 

@@ -39,6 +39,8 @@ struct ScotchCommandLine {
         case "add":
             guard arguments.count >= 2 else { return fail("Missing bottle path.") }
             return await addBottle(path: arguments[1])
+        case "setup":
+            return await installRuntime()
         case "install":
             return await installCommandLink()
         case "uninstall":
@@ -357,6 +359,49 @@ struct ScotchCommandLine {
         )
     }
 
+    private func installRuntime() async -> Int32 {
+        let services = makeServices()
+        let rosetta = RosettaService(processRunner: processRunner)
+        do {
+            if await services.runtimeInstaller.isRuntimeInstalled() {
+                print("Runtime is already installed.")
+                await services.installLedger.seedKnownRoots()
+                return 0
+            }
+
+            if !(await rosetta.isInstalled()) {
+                print("Installing Rosetta…")
+                let success = try await rosetta.installIfNeeded()
+                if !success {
+                    return fail("Rosetta installation did not complete successfully.")
+                }
+            }
+
+            print("Resolving runtime releases…")
+            let releases = try await services.runtimeInstaller.fetchLatestReleases()
+            print("Wine \(releases.wine.versionTag) (\(releases.wine.name))")
+            print("DXVK \(releases.dxvk.versionTag) (\(releases.dxvk.name))")
+            print("DXMT \(releases.dxmt.versionTag) (\(releases.dxmt.name))")
+
+            print("Downloading runtime…")
+            let progressState = DownloadPercentPrinter()
+            let archives = try await services.runtimeInstaller.downloadAll(releases: releases) { fraction in
+                progressState.printIfNeeded(fraction)
+            }
+
+            print("Installing Wine and translation backends…")
+            let (manifest, overlays) = try await services.runtimeInstaller.installAll(from: archives)
+            await services.installLedger.seedKnownRoots()
+            print("Installed Wine \(manifest.wineVersion), DXVK \(manifest.dxvkVersion), DXMT \(manifest.dxmtVersion)")
+            for overlay in overlays {
+                print("Overlay \(overlay.component.displayName): \(overlay.installedVersion ?? "missing")")
+            }
+            return 0
+        } catch {
+            return fail("Runtime setup failed: \(error.localizedDescription)")
+        }
+    }
+
     private func uninstallEverything(includeBottles: Bool, includeAppBundle: Bool) async -> Int32 {
         let services = makeServices()
         let plan = await services.uninstallService.preview(
@@ -384,6 +429,7 @@ struct ScotchCommandLine {
     private func makeServices() -> (
         fileSystem: LocalFileSystem,
         runtimeService: WineRuntimeService,
+        runtimeInstaller: RuntimeInstallerService,
         repository: BottleRepository,
         uninstallService: UninstallService,
         installLedger: InstallLedgerStore
@@ -408,6 +454,13 @@ struct ScotchCommandLine {
             logger: logger,
             processRunner: processRunner
         )
+        let runtimeInstaller = RuntimeInstallerService(
+            paths: paths,
+            fileSystem: fileSystem,
+            logger: logger,
+            plistStore: plistStore,
+            processRunner: processRunner
+        )
         let repository = BottleRepository(
             paths: paths,
             fileSystem: fileSystem,
@@ -427,7 +480,7 @@ struct ScotchCommandLine {
             runtimeService: runtimeService,
             installLedger: installLedger
         )
-        return (fileSystem, runtimeService, repository, uninstallService, installLedger)
+        return (fileSystem, runtimeService, runtimeInstaller, repository, uninstallService, installLedger)
     }
 
     private func fail(_ message: String) -> Int32 {
@@ -442,6 +495,7 @@ struct ScotchCommandLine {
               ScotchCmd list
               ScotchCmd create <bottle-name>
               ScotchCmd add <bottle-path>
+              ScotchCmd setup
               ScotchCmd install
               ScotchCmd uninstall
               ScotchCmd uninstall --all [--keep-bottles] [--keep-app]
@@ -458,5 +512,23 @@ struct ScotchCommandLine {
 
     private func shellQuoted(_ value: String) -> String {
         value.shellQuoted
+    }
+}
+
+private final class DownloadPercentPrinter: @unchecked Sendable {
+    private var lastPercent = -1
+    private let lock = NSLock()
+
+    func printIfNeeded(_ fraction: Double) {
+        let percent = Int((fraction * 100).rounded(.down))
+        lock.lock()
+        let shouldPrint = percent != lastPercent && percent % 5 == 0
+        if shouldPrint {
+            lastPercent = percent
+        }
+        lock.unlock()
+        if shouldPrint {
+            print("Download \(percent)%")
+        }
     }
 }

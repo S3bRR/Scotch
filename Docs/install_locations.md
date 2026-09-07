@@ -26,7 +26,7 @@ Uninstall (Settings → Uninstall Scotch, or `scotch uninstall --all`) reads tha
 |---|---|
 | `~/Library/Containers/com.s3brr.Scotch/` | Pre-1.1.0 settings, catalog, bottles |
 | `~/Library/Logs/com.s3brr.Scotch/` | Pre-1.1.0 logs |
-| `~/Library/Containers/com.s3brr.Scotch.Thumbnail/` | QuickLook sandbox |
+| `~/Library/Containers/com.s3brr.Scotch.Thumbnail/` | QuickLook sandbox (macOS may refuse deletion without Full Disk Access; uninstall then skips it) |
 | `~/.cache/winetricks/` | Legacy winetricks cache |
 
 ## System / optional
