@@ -518,9 +518,25 @@ public final class BottleDetailViewModel: ObservableObject {
         }
     }
 
+    public func launchSteam() async {
+        guard let steamURL = Self.steamExecutableURL(for: bottle) else {
+            statusMessage = "Steam is not installed in this bottle."
+            return
+        }
+        var program = ProgramRecord(
+            executableURL: steamURL,
+            displayName: "Steam",
+            pinned: true
+        )
+        if let existing = programs.first(where: { $0.executableURL.path(percentEncoded: false).caseInsensitiveCompare(steamURL.path(percentEncoded: false)) == .orderedSame }) {
+            program = existing
+        }
+        await runProgram(program)
+    }
+
     public func runControlPanel() async {
         do {
-            _ = try await container.runtimeService.runWine(arguments: ["control"], bottle: bottle, environment: [:])
+            try await container.runtimeService.runGUITool(arguments: ["control"], bottle: bottle)
             statusMessage = "Control Panel launched."
         } catch {
             statusMessage = "Failed to launch Control Panel: \(error.localizedDescription)"
@@ -529,7 +545,7 @@ public final class BottleDetailViewModel: ObservableObject {
 
     public func runRegedit() async {
         do {
-            _ = try await container.runtimeService.runWine(arguments: ["regedit"], bottle: bottle, environment: [:])
+            try await container.runtimeService.runGUITool(arguments: ["regedit"], bottle: bottle)
             statusMessage = "Regedit launched."
         } catch {
             statusMessage = "Failed to launch Regedit: \(error.localizedDescription)"
@@ -538,7 +554,7 @@ public final class BottleDetailViewModel: ObservableObject {
 
     public func runWineCfg() async {
         do {
-            _ = try await container.runtimeService.runWine(arguments: ["winecfg"], bottle: bottle, environment: [:])
+            try await container.runtimeService.runGUITool(arguments: ["winecfg"], bottle: bottle)
             statusMessage = "Winecfg launched."
         } catch {
             statusMessage = "Failed to launch Winecfg: \(error.localizedDescription)"

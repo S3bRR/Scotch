@@ -34,6 +34,22 @@ public struct BottleDetailView: View {
                 .padding(ScotchTheme.Spacing.medium)
             }
             .scrollContentBackground(.hidden)
+            .overlay(alignment: .bottom) {
+                if let status = viewModel.statusMessage {
+                    Text(status)
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.bottom, 72)
+                        .task(id: status) {
+                            try? await Task.sleep(for: .seconds(5))
+                            if viewModel.statusMessage == status {
+                                viewModel.statusMessage = nil
+                            }
+                        }
+                }
+            }
             .bottomBar {
                 HStack(spacing: ScotchTheme.Spacing.small) {
                     Button {
@@ -58,7 +74,13 @@ public struct BottleDetailView: View {
                     .help("Diagnostics")
 
                     Spacer()
-                    if !viewModel.steamInstalled {
+                    if viewModel.steamInstalled {
+                        Button {
+                            Task { await viewModel.launchSteam() }
+                        } label: {
+                            Label("Launch Steam", systemImage: "gamecontroller.fill")
+                        }
+                    } else {
                         Button {
                             Task { await viewModel.installSteam() }
                         } label: {

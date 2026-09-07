@@ -57,6 +57,7 @@ public protocol WineRuntimeServiceProtocol: Sendable {
     func runProgram(at url: URL, arguments: [String], bottle: BottleSummary, extraEnvironment: [String: String]) async throws
     func runSteam(in bottle: BottleSummary, arguments: [String]) async throws
     func runBatchFile(at url: URL, bottle: BottleSummary, extraEnvironment: [String: String]) async throws
+    func runGUITool(arguments: [String], bottle: BottleSummary) async throws
     func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String]) async throws -> String
     func runWineServer(arguments: [String], bottle: BottleSummary) async throws -> String
     func syncCompatibilityState(for bottle: BottleSummary) async

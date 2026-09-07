@@ -23,8 +23,6 @@ public struct RootView: View {
     @State private var showDiagnostics = false
     @State private var pendingRunFileURL: URL?
     @State private var bottleFilter = ""
-    @State private var showOpenExistingPicker = false
-    @State private var movingBottle: BottleSummary?
     @State private var deletingBottle: BottleSummary?
     @State private var renamingBottle: BottleSummary?
     @State private var renameText = ""
@@ -101,7 +99,7 @@ public struct RootView: View {
             Task { await viewModel.killAllBottles() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .scotchOpenExistingBottle)) { _ in
-            showOpenExistingPicker = true
+            Task { await presentOpenExistingBottle() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .scotchClearShaderCaches)) { _ in
             Task { await viewModel.clearShaderCaches() }
@@ -111,25 +109,20 @@ public struct RootView: View {
                 viewModel.toastMessage = message
             }
         }
-        .fileImporter(
-            isPresented: $showOpenExistingPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            if case .success(let url) = result {
-                Task { await viewModel.addExistingBottle(at: url) }
-            }
-        }
-        .fileImporter(
-            isPresented: Binding(
-                get: { movingBottle != nil },
-                set: { if !$0 { movingBottle = nil } }
-            ),
-            allowedContentTypes: [.folder]
-        ) { result in
-            guard let bottle = movingBottle else { return }
-            movingBottle = nil
-            if case .success(let url) = result {
-                Task { await viewModel.moveBottle(bottle, to: url) }
+        .overlay(alignment: .bottom) {
+            if let toast = viewModel.toastMessage {
+                Text(toast)
+                    .font(.callout)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.bottom, 24)
+                    .task(id: toast) {
+                        try? await Task.sleep(for: .seconds(4))
+                        if viewModel.toastMessage == toast {
+                            viewModel.toastMessage = nil
+                        }
+                    }
             }
         }
         .alert(
@@ -412,8 +405,28 @@ public struct RootView: View {
         renamingBottle = bottle
     }
 
+    private func presentOpenExistingBottle() async {
+        if let url = await AsyncOpenPanel.present(
+            title: "Open Existing Bottle",
+            allowedContentTypes: [.folder],
+            canChooseDirectories: true,
+            canChooseFiles: false
+        ) {
+            await viewModel.addExistingBottle(at: url)
+        }
+    }
+
     private func moveBottlePrompt(_ bottle: BottleSummary) {
-        movingBottle = bottle
+        Task {
+            if let url = await AsyncOpenPanel.present(
+                title: "Move Bottle",
+                allowedContentTypes: [.folder],
+                canChooseDirectories: true,
+                canChooseFiles: false
+            ) {
+                await viewModel.moveBottle(bottle, to: url)
+            }
+        }
     }
 
     private func exportBottlePrompt(_ bottle: BottleSummary) {

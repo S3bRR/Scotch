@@ -72,6 +72,16 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         )
     }
 
+    public func runGUITool(arguments: [String], bottle: BottleSummary) async throws {
+        try await prepareBottleForLaunch(bottle)
+        try await runWineBundle(
+            arguments: arguments,
+            bottle: bottle,
+            extraEnvironment: [:],
+            displayName: arguments.first ?? "wine"
+        )
+    }
+
     public func prepareBottleForLaunch(_ bottle: BottleSummary) async throws {
         try ensureRuntimeReady()
         try applyBackendDLLs(for: bottle)

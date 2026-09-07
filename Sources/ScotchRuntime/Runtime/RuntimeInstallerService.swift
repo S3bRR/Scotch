@@ -189,6 +189,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
 
             try validateManifest(manifest)
             try verifyInstalledArtifacts()
+            await stripQuarantine(at: libraries)
 
             try await plistStore.write(manifest, to: paths.runtimeManifestURL)
             if hadExistingInstall, fileSystem.fileExists(at: backupURL) {
@@ -651,6 +652,16 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         export WINE="${WINE:-$LIBS/Wine/bin/wine}"
         exec "$LIBS/Wine/bin/wine" "$@"
         """
+    }
+
+    private func stripQuarantine(at url: URL) async {
+        let spec = ProcessSpecification(
+            executableURL: URL(fileURLWithPath: "/usr/bin/xattr"),
+            arguments: ["-dr", "com.apple.quarantine", url.path(percentEncoded: false)],
+            displayName: "xattr -d quarantine",
+            timeout: 60
+        )
+        _ = try? await processRunner.captureProcess(spec, outputFileHandle: nil)
     }
 
     private func cleanupTransientInstallFiles() {

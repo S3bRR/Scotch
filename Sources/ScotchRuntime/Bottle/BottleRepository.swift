@@ -242,6 +242,7 @@ public actor BottleRepository: BottleRepositoryProtocol {
 
             catalog.bottlePaths[index] = destination.path(percentEncoded: false)
             try await plistStore.write(catalog, to: paths.bottleCatalogURL)
+            migrateProgramSettings(from: currentURL, to: destination)
             return BottleSummary(id: id, directoryURL: destination, settings: settings, isAvailable: true)
         } catch {
             if fileSystem.fileExists(at: destination), !fileSystem.fileExists(at: currentURL) {
@@ -633,6 +634,31 @@ public actor BottleRepository: BottleRepositoryProtocol {
             .map { $0.path(percentEncoded: false) }
 
         return BottleCatalog(bottlePaths: discoveredPaths)
+    }
+
+    private func migrateProgramSettings(from oldRoot: URL, to newRoot: URL) {
+        let settingsDirectory = newRoot.appending(path: "Program Settings")
+        guard fileSystem.fileExists(at: settingsDirectory) else { return }
+
+        let driveC = newRoot.appending(path: "drive_c")
+        guard let enumerator = fileSystem.enumerator(at: driveC) else { return }
+
+        while let item = enumerator.nextObject() as? URL {
+            guard item.pathExtension.lowercased() == "exe" else { continue }
+            let newPath = item.path(percentEncoded: false)
+            let oldPath = rewritePath(newPath, oldRoot: newRoot, newRoot: oldRoot)
+            let staleURL = programSettingsURL(for: URL(fileURLWithPath: oldPath), bottleDirectory: newRoot)
+            let freshURL = programSettingsURL(for: item, bottleDirectory: newRoot)
+            guard staleURL != freshURL, fileSystem.fileExists(at: staleURL) else { continue }
+            do {
+                if fileSystem.fileExists(at: freshURL) {
+                    try fileSystem.removeItem(at: freshURL)
+                }
+                try fileSystem.moveItem(at: staleURL, to: freshURL)
+            } catch {
+                logger.warning("Failed to migrate program settings for \(item.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
     }
 
     private func rewritePath(_ rawPath: String, oldRoot: URL, newRoot: URL) -> String {
