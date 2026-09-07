@@ -119,6 +119,11 @@ public actor UninstallService: UninstallServiceProtocol {
             target(at: paths.legacyContainerDirectory, kind: .leftover),
             target(at: paths.legacyLogsDirectory, kind: .logs),
             target(at: paths.cachesDirectory, kind: .cache),
+            target(at: paths.commandCacheDirectory, kind: .cache),
+            target(at: paths.commandHTTPStorageDirectory, kind: .cache),
+            target(at: paths.appHTTPStorageDirectory, kind: .cache),
+            target(at: paths.thumbnailContainerDirectory, kind: .leftover),
+            target(at: paths.thumbnailApplicationScriptsDirectory, kind: .leftover),
             target(at: paths.savedStateDirectory, kind: .leftover)
         ]
     }

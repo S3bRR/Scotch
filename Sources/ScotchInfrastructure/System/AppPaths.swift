@@ -42,6 +42,32 @@ public struct AppPaths: Sendable {
             .appending(path: "\(bundleIdentifier).Thumbnail")
     }
 
+    public var thumbnailApplicationScriptsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library")
+            .appending(path: "Application Scripts")
+            .appending(path: "\(bundleIdentifier).Thumbnail")
+    }
+
+    public var commandCacheDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: "ScotchCmd")
+    }
+
+    public var commandHTTPStorageDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library")
+            .appending(path: "HTTPStorages")
+            .appending(path: "ScotchCmd")
+    }
+
+    public var appHTTPStorageDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library")
+            .appending(path: "HTTPStorages")
+            .appending(path: bundleIdentifier)
+    }
+
     public var defaultBottlesDirectory: URL {
         applicationSupportDirectory.appending(path: "Bottles")
     }

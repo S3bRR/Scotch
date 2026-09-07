@@ -26,7 +26,7 @@ Uninstall (Settings → Uninstall Scotch, or `scotch uninstall --all`) reads tha
 |---|---|
 | `~/Library/Containers/com.s3brr.Scotch/` | Pre-1.1.0 settings, catalog, bottles |
 | `~/Library/Logs/com.s3brr.Scotch/` | Pre-1.1.0 logs |
-| `~/Library/Containers/com.s3brr.Scotch.Thumbnail/` | QuickLook sandbox (macOS may refuse deletion without Full Disk Access; uninstall then skips it) |
+| `~/Library/Containers/com.s3brr.Scotch.Thumbnail/` | QuickLook sandbox (macOS may refuse deletion; uninstall skips permission errors) |
 | `~/.cache/winetricks/` | Legacy winetricks cache |
 
 ## System / optional
@@ -37,6 +37,10 @@ Uninstall (Settings → Uninstall Scotch, or `scotch uninstall --all`) reads tha
 | `/Applications/Scotch.app` | App bundle (if installed there) |
 | `~/Library/Preferences/com.s3brr.Scotch.plist` | UserDefaults |
 | `~/Library/Caches/com.s3brr.Scotch/` | App cache |
+| `~/Library/Caches/ScotchCmd/` | CLI URLSession cache |
+| `~/Library/HTTPStorages/com.s3brr.Scotch/` | App HTTP storage |
+| `~/Library/HTTPStorages/ScotchCmd/` | CLI HTTP storage |
+| `~/Library/Application Scripts/com.s3brr.Scotch.Thumbnail/` | QuickLook scripts |
 | `~/Library/Saved Application State/com.s3brr.Scotch.savedState` | Window state |
 | `/tmp/scotch_gpu_spoof.log` | GPU spoof debug log |
 | `$TMPDIR/ScotchRuntimeDownloads` | First-run archives |
