@@ -10,7 +10,7 @@ public enum TranslationBackend: String, Codable, CaseIterable, Sendable {
     public var displayName: String {
         switch self {
         case .dxvk:
-            "DXVK (DX9/10/11)"
+            "DXVK (DX10/11)"
         case .dxmt:
             "DXMT (DX10/11)"
         case .d3dmetal:
@@ -25,7 +25,7 @@ public enum TranslationBackend: String, Codable, CaseIterable, Sendable {
     public var wineDLLOverrides: String? {
         switch self {
         case .dxvk:
-            "dxgi,d3d9,d3d10core,d3d11=n,b"
+            "d3d10core,d3d11=n,b"
         case .dxmt:
             "dxgi,d3d10core,d3d11,winemetal=n,b"
         case .d3dmetal:
