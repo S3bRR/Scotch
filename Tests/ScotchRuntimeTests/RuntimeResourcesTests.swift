@@ -46,6 +46,19 @@ struct RuntimeResourcesTests {
         #expect(lookup.url(forResource: "cabextract", withExtension: nil) == nil)
     }
 
+    @Test func xctestHostFindsResourcesBesideTheTestBundle() throws {
+        let fixture = try ResourceFixture()
+        defer { fixture.remove() }
+        let output = fixture.root.appending(path: ".build/debug")
+        let cabextract = try fixture.write("cabextract", at: output.appending(path: "\(RuntimeResources.bundleName)/cabextract"))
+        let lookup = RuntimeResources(
+            resourceURL: URL(fileURLWithPath: "/usr/bin"),
+            executableURL: URL(fileURLWithPath: "/usr/bin/xctest"),
+            containingBundleURL: output.appending(path: "ScotchPackageTests.xctest")
+        )
+        #expect(lookup.url(forResource: "cabextract", withExtension: nil) == cabextract)
+    }
+
     @Test func actualSwiftPMResourcesAreResolvable() {
         #expect(RuntimeResources.bundled.url(forResource: "libscotch_gpu_spoof", withExtension: "dylib", subdirectory: "VulkanSpoof") != nil)
         #expect(RuntimeResources.bundled.url(forResource: "cabextract", withExtension: nil) != nil)

@@ -7,13 +7,19 @@ struct RuntimeResources: Sendable {
     static let bundleName = "Scotch_ScotchRuntime.bundle"
     static let bundled = RuntimeResources(
         resourceURL: Bundle.main.resourceURL,
-        executableURL: Bundle.main.executableURL
+        executableURL: Bundle.main.executableURL,
+        containingBundleURL: Bundle(for: RuntimeResourceBundleMarker.self).bundleURL
     )
 
     private let directories: [URL]
 
-    init(resourceURL: URL?, executableURL: URL?) {
+    init(resourceURL: URL?, executableURL: URL?, containingBundleURL: URL? = nil) {
         var roots = resourceURL.map { [$0] } ?? []
+        // Under XCTest, Bundle.main belongs to /usr/bin/xctest. The marker
+        // identifies the test bundle that contains the statically linked runtime.
+        if let containingBundleURL, containingBundleURL.pathExtension == "xctest" {
+            roots.append(containingBundleURL.deletingLastPathComponent())
+        }
         if let executableURL {
             let executableDirectory = executableURL.deletingLastPathComponent()
             roots.append(executableDirectory)
@@ -52,3 +58,5 @@ struct RuntimeResources: Sendable {
         return nil
     }
 }
+
+private final class RuntimeResourceBundleMarker {}
