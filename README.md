@@ -87,7 +87,7 @@ Other combinations may work but are unsupported.
    - Apple's D3DMetal 3.0 framework (redistributed from GPTK 3 for DX11/12 support).
    - Mesa Zink 26.2.0 for OpenGL-over-Vulkan.
    - Stock `winemac.so` from Wine 11.16 is used as-is. The old 11.6 OpenGL byte patch is not applied (it is ABI-specific to that build).
-3. It builds a `Wine.app` launcher bundle so Wine's child processes get a proper macOS foreground activation policy — without this, Wine's windows are created invisible offscreen.
+3. It builds, ad-hoc signs, and verifies a `Wine.app` launcher bundle so Wine's child processes get a proper macOS foreground activation policy — without this, Wine's windows are created invisible offscreen. Before launching, it verifies the wrapper and repairs unsigned or modified wrappers from earlier installs.
 4. When you create a bottle, Scotch creates a Wine prefix with `wineboot --init`, then `winecfg` for the selected Windows version, then winetricks corefonts.
 5. When you run an `.exe`, Scotch copies the backend-specific DLLs (DXVK / DXMT / D3DMetal / Zink) into the bottle's `system32` and `syswow64`, sets the right `WINEDLLOVERRIDES`, and launches Wine via `open -a Wine.app --env …` so the bottle's `WINEPREFIX` actually reaches the Wine process.
 

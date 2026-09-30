@@ -84,6 +84,7 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
 
     public func prepareBottleForLaunch(_ bottle: BottleSummary) async throws {
         try ensureRuntimeReady()
+        try await WineBundleSigning(processRunner: processRunner).ensureSigned(at: paths.wineBundleURL)
         try applyBackendDLLs(for: bottle)
         try writeDXVKConfigIfNeeded(for: bottle)
         await syncCompatibilityRegistry(for: bottle)

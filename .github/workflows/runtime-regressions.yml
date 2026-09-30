@@ -1,0 +1,23 @@
+name: Runtime regressions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Runtime regression tests (including native codesign)
+        run: swift test
+      - name: Build command-line release
+        run: swift build -c release --product ScotchCmd
+      - name: Resolve resources from a relocated app
+        run: bash scripts/test_relocated_resources.sh

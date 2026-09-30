@@ -33,6 +33,10 @@ let package = Package(
                 .process("Resources")
             ]
         ),
+        .testTarget(
+            name: "ScotchRuntimeTests",
+            dependencies: ["ScotchRuntime"]
+        ),
         .target(
             name: "ScotchFeatures",
             dependencies: ["ScotchDomain", "ScotchInfrastructure", "ScotchRuntime"]
