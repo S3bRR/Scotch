@@ -12,13 +12,15 @@ struct RuntimeInstallerTests {
         let marker = paths.librariesDirectory.appending(path: "previous-runtime")
         try "keep this runtime".write(to: marker, atomically: true, encoding: .utf8)
 
+        let runner = ExtractionThenSigningFailure()
         let installer = RuntimeInstallerService(
             paths: paths, fileSystem: LocalFileSystem(), logger: TestLogger(),
-            plistStore: PlistStore(), processRunner: ExtractionThenSigningFailure()
+            plistStore: PlistStore(), processRunner: runner
         )
         await #expect(throws: RuntimeInstallerError.self) {
             _ = try await installer.installAll(from: archives)
         }
+        #expect(await runner.didAttemptSigning)
         #expect(try String(contentsOf: marker, encoding: .utf8) == "keep this runtime")
         #expect(!FileManager.default.fileExists(atPath: paths.wineBundleURL.path))
         let remaining = try FileManager.default.contentsOfDirectory(at: paths.applicationSupportDirectory, includingPropertiesForKeys: nil)
@@ -28,13 +30,15 @@ struct RuntimeInstallerTests {
     @Test func signingFailureDoesNotPublishFreshInstall() async throws {
         let paths = AppPaths(bundleIdentifier: "com.s3brr.Scotch.Tests.\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: paths.applicationSupportDirectory) }
+        let runner = ExtractionThenSigningFailure()
         let installer = RuntimeInstallerService(
             paths: paths, fileSystem: LocalFileSystem(), logger: TestLogger(),
-            plistStore: PlistStore(), processRunner: ExtractionThenSigningFailure()
+            plistStore: PlistStore(), processRunner: runner
         )
         await #expect(throws: RuntimeInstallerError.self) {
             _ = try await installer.installAll(from: archives)
         }
+        #expect(await runner.didAttemptSigning)
         #expect(!FileManager.default.fileExists(atPath: paths.librariesDirectory.path))
         #expect(!FileManager.default.fileExists(atPath: paths.runtimeManifestURL.path))
     }
@@ -55,8 +59,10 @@ private struct TestLogger: AppLogger {
     func error(_ message: String) {}
 }
 
-private struct ExtractionThenSigningFailure: ProcessRunner {
-    func streamProcess(_ specification: ProcessSpecification, outputFileHandle: FileHandle?) throws -> AsyncStream<ProcessEvent> {
+private actor ExtractionThenSigningFailure: ProcessRunner {
+    private(set) var didAttemptSigning = false
+
+    nonisolated func streamProcess(_ specification: ProcessSpecification, outputFileHandle: FileHandle?) throws -> AsyncStream<ProcessEvent> {
         fatalError("Tests use captureProcess")
     }
 
@@ -68,6 +74,7 @@ private struct ExtractionThenSigningFailure: ProcessRunner {
             try "test wine".write(to: wine, atomically: true, encoding: .utf8)
             return ""
         }
+        didAttemptSigning = specification.executableURL.path == "/usr/bin/codesign"
         throw ProcessRunnerError.nonZeroExit(displayName: specification.displayName, status: 1, output: "signing failed")
     }
 }
