@@ -212,7 +212,7 @@ public actor WinetricksService: WinetricksServiceProtocol {
         if let mainBundleCabextract = Bundle.main.url(forResource: "cabextract", withExtension: nil)?.deletingLastPathComponent() {
             return mainBundleCabextract
         }
-        if let moduleCabextract = Bundle.module.url(forResource: "cabextract", withExtension: nil)?.deletingLastPathComponent() {
+        if let moduleCabextract = RuntimeResources.bundled.url(forResource: "cabextract", withExtension: nil)?.deletingLastPathComponent() {
             return moduleCabextract
         }
 
@@ -233,4 +233,3 @@ public actor WinetricksService: WinetricksServiceProtocol {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
-

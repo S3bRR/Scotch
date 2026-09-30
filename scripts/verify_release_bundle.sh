@@ -32,12 +32,16 @@ fi
 
 # Resource presence checks.
 EXPECTED_FILES=(
+  "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/cabextract"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libMoltenVK_shim.c"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libscotch_gpu_spoof.dylib"
 )
 for file in "${EXPECTED_FILES[@]}"; do
   [[ -e "$file" ]] || { echo "Missing required artifact: $file"; exit 1; }
 done
+
+bash "$ROOT_DIR/scripts/test_relocated_resources.sh" \
+  "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle"
 
 if command -v lipo >/dev/null 2>&1; then
   SHIM_ARCHES="$(lipo -archs "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libscotch_gpu_spoof.dylib")"

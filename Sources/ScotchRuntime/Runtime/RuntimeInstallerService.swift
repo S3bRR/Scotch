@@ -193,6 +193,8 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             try verifyInstalledArtifacts()
             await stripQuarantine(at: libraries)
 
+            try await WineBundleSigning(processRunner: processRunner).verify(at: paths.wineBundleURL)
+
             try await plistStore.write(manifest, to: paths.runtimeManifestURL)
             if hadExistingInstall, fileSystem.fileExists(at: backupURL) {
                 try? fileSystem.removeItem(at: backupURL)
@@ -339,6 +341,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         try? fileSystem.removeItem(at: scratch)
 
         try createWineAppBundle()
+        try await WineBundleSigning(processRunner: processRunner).signAndVerify(at: paths.wineBundleURL)
     }
 
     private func locateWineRoot(in directory: URL) -> URL? {
@@ -608,9 +611,9 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     private func installGPUSpoofShim() async throws {
-        let sourceURL =
-            Bundle.module.url(forResource: "libscotch_gpu_spoof", withExtension: "dylib", subdirectory: "VulkanSpoof")
-            ?? Bundle.module.url(forResource: "libscotch_gpu_spoof", withExtension: "dylib")
+        let sourceURL = RuntimeResources.bundled.url(
+            forResource: "libscotch_gpu_spoof", withExtension: "dylib", subdirectory: "VulkanSpoof"
+        )
 
         guard let sourceURL else {
             throw RuntimeInstallerError.installFailed("GPU spoof shim dylib not bundled in runtime resources")
