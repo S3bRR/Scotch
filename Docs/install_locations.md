@@ -6,6 +6,10 @@ Every extra path Scotch creates is recorded in:
 
 Uninstall (Settings → Uninstall Scotch, or `scotch uninstall --all`) reads that ledger plus the known roots below.
 
+Uninstall also unregisters the QuickLook extension and both apps (Scotch.app, Wine.app) from LaunchServices, clears preferences through `defaults delete` (cfprefsd would otherwise write them back), and after Scotch exits retries anything macOS refused while it was running.
+
+Not removed: **Rosetta 2**, which Scotch may install via `softwareupdate --install-rosetta`. It is a shared macOS component in SIP-protected `/Library/Apple`, used by every Intel app, and macOS provides no supported way to uninstall it.
+
 ## App data (runtime)
 
 | Path | What |
@@ -26,7 +30,7 @@ Uninstall (Settings → Uninstall Scotch, or `scotch uninstall --all`) reads tha
 |---|---|
 | `~/Library/Containers/com.s3brr.Scotch/` | Pre-1.1.0 settings, catalog, bottles |
 | `~/Library/Logs/com.s3brr.Scotch/` | Pre-1.1.0 logs |
-| `~/Library/Containers/com.s3brr.Scotch.Thumbnail/` | QuickLook sandbox (macOS may refuse deletion; uninstall skips permission errors) |
+| `~/Library/Containers/com.s3brr.Scotch.Thumbnail/` | QuickLook sandbox. Uninstall unregisters and stops the extension first; if macOS still refuses, it is retried after Scotch exits |
 | `~/.cache/winetricks/` | Legacy winetricks cache |
 
 ## System / optional
@@ -48,6 +52,10 @@ Uninstall (Settings → Uninstall Scotch, or `scotch uninstall --all`) reads tha
 | `$TMPDIR/ScotchSteamInstall` | Steam installer temp |
 | `$DARWIN_USER_CACHE_DIR/d3dm` | D3DMetal shader cache |
 | `$DARWIN_USER_CACHE_DIR/dxmt` | DXMT shader cache |
+| `$DARWIN_USER_CACHE_DIR/<id>` and `$DARWIN_USER_TEMP_DIR/<id>` | Metal shader caches for `com.s3brr.Scotch`, `.WineBundle`, `.Thumbnail`, and `org.winehq.wine` (Wine processes outside Wine.app) |
+| `~/Library/{Preferences,Caches,HTTPStorages,Saved Application State}/com.s3brr.Scotch.{WineBundle,Thumbnail}…` | Wine.app launcher and QuickLook extension state |
+| `/tmp/.wine-<uid>/server-<dev>-<inode>` | Wine server socket directory per bottle (the parent is removed when empty) |
+| `…/Steam/bin/cef/cef.win64/steamwebhelper_real.exe` | Inside bottles: Steam's real web helper, swapped for Scotch's launcher. Removed with the bottle |
 | User-chosen `.app` shortcuts | Recorded in the ledger when created |
 | Bottles outside the default folder | Recorded in the ledger and catalog |
 
@@ -57,11 +65,11 @@ These are **not** part of a user install. Remove them when finished working in t
 
 | Path | What |
 |---|---|
-| `/Users/s/Desktop/scotch_1/.build/` | SwiftPM build products |
-| `/Users/s/Desktop/scotch_1/.release/` | Packaged `Scotch.app` + `Scotch.dmg` |
+| `<repo>/.build/` | SwiftPM build products |
+| `<repo>/.release/` | Packaged `Scotch.app` + `Scotch.dmg` |
 
 ```bash
-rm -rf /Users/s/Desktop/scotch_1/.build /Users/s/Desktop/scotch_1/.release
+rm -rf <repo>/.build <repo>/.release
 ```
 
 Nothing from this session was copied into `/Applications` or `~/Library`. First-run setup of the packaged app is what creates the Application Support tree.

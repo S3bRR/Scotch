@@ -2,7 +2,7 @@
 
 A native macOS app for running Windows games and applications on Apple Silicon.
 
-Scotch targets **macOS 26 Tahoe** and **Apple Silicon (M-series)**. It wraps an up-to-date Wine Staging build with DX11/12 translation via Apple's D3DMetal, DX10/11 via DXVK-macOS, native-Metal D3D10/11 via 3Shain's DXMT, and OpenGL via Mesa Zink — each selectable per bottle.
+Scotch targets **macOS 26 Tahoe** and later — currently working on **macOS 27.0.1 Golden Gate** — and **Apple Silicon (M-series)**. It wraps an up-to-date Wine Staging build with DX11/12 translation via Apple's D3DMetal, DX10/11 via DXVK-macOS, native-Metal D3D10/11 via 3Shain's DXMT, and OpenGL via Mesa Zink — each selectable per bottle.
 
 This is a personal project. Use at your own risk.
 
@@ -23,8 +23,11 @@ Settings → Uninstall Scotch removes everything Scotch created:
 - `~/Library/Application Support/com.s3brr.Scotch/` (Wine runtime, default bottles, settings, logs, caches)
 - leftover `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` from older versions
 - `/usr/local/bin/scotch`
-- shader caches and temporary downloads
+- shader caches (including Wine's own Metal cache), Wine server sockets, and temporary downloads
+- preferences and saved state for Scotch, its internal Wine launcher, and the QuickLook extension (the extension and both apps are also unregistered from macOS)
 - optionally every bottle prefix and `Scotch.app` itself
+
+Scotch quits by itself when uninstall finishes. Rosetta 2 is not removed: it is a shared macOS component that other Intel apps rely on, and macOS has no supported way to uninstall it.
 
 From a terminal: `scotch setup` installs the Wine runtime without the GUI. `scotch uninstall --all` removes everything (add `--keep-bottles` to leave prefixes).
 
@@ -48,7 +51,10 @@ Each translation backend is a separate option in the bottle config picker. You p
 - **DXVK / DXMT / D3DMetal / Zink** translation backends, selectable per bottle.
 - **GPU identity spoofing**: Four-layer spoof so games detect a known NVIDIA/AMD GPU instead of Apple Silicon (vendor `0x106b`). Combines a Vulkan shim that patches `vkGetPhysicalDeviceProperties` at runtime, `dxvk.conf` generation, Wine Direct3D registry keys, and MoltenVK compatibility vars. Preset picker with AMD RX 7900 XTX, RX 6800 XT, NVIDIA RTX 4090, RTX 3080, Custom, and Off.
 - **Additive Zink toggle** for titles that need OpenGL 4.6.
-- **Winetricks** integrated as a sheet; first-run `corefonts` bootstrap.
+- **Winetricks** integrated as a sheet; first-run `corefonts` bootstrap (a failed font download no longer discards the new bottle).
+- **Steam** one-click install and launch. Scotch wraps Steam's web helper so its UI renders in a single process — Wine 11 on Apple Silicon otherwise shows Steam as a black window. The wrap is reapplied automatically after Steam updates.
+- **Bottle health check**: new bottles are checked for working 32-bit (WoW64) support and repaired once before setup continues, with a clear error if Wine still can't run 32-bit programs.
+- **Progress feedback**: spinners while a bottle is being created and while a pinned game is starting.
 - **Diagnostics screen** with live process list, log browser, and effective-environment preview.
 - **Start-menu discovery** that auto-pins `.lnk`-discovered programs per bottle.
 - **Per-program settings** (locale, arguments, env vars) persisted alongside the bottle.
@@ -58,7 +64,7 @@ Each translation backend is a separate option in the bottle config picker. You p
 
 ## System requirements
 
-- **macOS 26 Tahoe** or later
+- **macOS 26 Tahoe** or later (working on macOS 27.0.1 Golden Gate)
 - **Apple Silicon** (M1 / M2 / M3 / M4 / M5 / Pro / Max / Ultra)
 - **Rosetta 2** installed (Wine runs under Rosetta — Scotch will prompt during setup if missing)
 - **GStreamer.framework** recommended (Gcenx Wine 11.16 uses it for media). DXVK/DXMT/D3DMetal games still run without it
@@ -74,9 +80,9 @@ Each translation backend is a separate option in the bottle config picker. You p
 | D3DMetal | 3.0 | Apple GPTK 3 (Scotch overlay; GPTK 3.0-3 is still D3DMetal 3.0) |
 | Mesa Zink | 26.2.0 | pal1000/mesa-dist-win, repackaged as Scotch `zink-2.0` |
 | MoltenVK | 1.4.0 | Bundled inside Gcenx Wine 11.16 |
-| macOS | 26 | Tahoe minimum, Apple Silicon only |
+| macOS | 26 – 27.0.1 | Tahoe minimum; working on 27.0.1 Golden Gate. Apple Silicon only |
 
-Wine 11.16 GUI (`winecfg`, `notepad`) was verified on macOS 26.6.2 / Apple Silicon with stock `winemac.so` (no nodrv / missing-graphics-driver errors). DXVK, DXMT, D3DMetal, and Zink DLL inject + restore, GPU spoof registry, and CLI `setup`/`list`/`run`/`shellenv` were exercised against this matrix.
+Scotch 1.2.3 was verified on macOS 27.0.1 Golden Gate / Apple Silicon: bottle creation, Steam install and launch, pinned game launch, and uninstall. Wine 11.16 GUI (`winecfg`, `notepad`) was verified on macOS 26.6.2 / Apple Silicon with stock `winemac.so` (no nodrv / missing-graphics-driver errors). DXVK, DXMT, D3DMetal, and Zink DLL inject + restore, GPU spoof registry, and CLI `setup`/`list`/`run`/`shellenv` were exercised against this matrix.
 
 Other combinations may work but are unsupported.
 
@@ -88,7 +94,7 @@ Other combinations may work but are unsupported.
    - Mesa Zink 26.2.0 for OpenGL-over-Vulkan.
    - Stock `winemac.so` from Wine 11.16 is used as-is. The old 11.6 OpenGL byte patch is not applied (it is ABI-specific to that build).
 3. It builds, ad-hoc signs, and verifies a `Wine.app` launcher bundle so Wine's child processes get a proper macOS foreground activation policy — without this, Wine's windows are created invisible offscreen. Before launching, it verifies the wrapper and repairs unsigned or modified wrappers from earlier installs.
-4. When you create a bottle, Scotch creates a Wine prefix with `wineboot --init`, then `winecfg` for the selected Windows version, then winetricks corefonts.
+4. When you create a bottle, Scotch creates a Wine prefix with `wineboot --init`, checks that 32-bit (WoW64) programs can run (repairing with `wineboot -u` once if not), then runs `winecfg` for the selected Windows version, then winetricks corefonts.
 5. When you run an `.exe`, Scotch copies the backend-specific DLLs (DXVK / DXMT / D3DMetal / Zink) into the bottle's `system32` and `syswow64`, sets the right `WINEDLLOVERRIDES`, and launches Wine via `open -a Wine.app --env …` so the bottle's `WINEPREFIX` actually reaches the Wine process.
 
 All Scotch data lives under `~/Library/Application Support/com.s3brr.Scotch/` (runtime, bottles, settings, logs, winetricks cache). Older installs that used `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` are migrated on launch and removed by Uninstall.
