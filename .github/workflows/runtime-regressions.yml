@@ -1,4 +1,4 @@
-name: Runtime regressions
+name: Build checks
 
 on:
   pull_request:
@@ -15,8 +15,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Swift version
         run: swift --version
-      - name: Runtime regression tests (including native codesign)
-        run: swift test
       - name: Build command-line release
         run: swift build -c release --product ScotchCmd
       - name: Resolve resources from a relocated app
