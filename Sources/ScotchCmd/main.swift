@@ -151,6 +151,9 @@ struct ScotchCommandLine {
                 let configured = try await services.repository.setupWineEnvironment(summary, progress: nil)
                 let final = try await services.repository.installBottleCoreFonts(configured, progress: nil)
                 print("Created bottle '\(name)' at \(final.directoryURL.path(percentEncoded: false)).")
+                if let warning = final.setupWarningMessage {
+                    print("Warning: \(warning)")
+                }
                 await services.installLedger.record(
                     path: final.directoryURL,
                     kind: .bottle,

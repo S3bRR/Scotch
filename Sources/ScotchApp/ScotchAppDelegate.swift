@@ -20,6 +20,27 @@ final class ScotchAppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(self, selector: #selector(pinAllWindowsGlass), name: NSWindow.didBecomeKeyNotification, object: nil)
         center.addObserver(self, selector: #selector(pinAllWindowsGlass), name: NSApplication.didResignActiveNotification, object: nil)
         center.addObserver(self, selector: #selector(pinAllWindowsGlass), name: NSApplication.didBecomeActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(quitAfterUninstall), name: .scotchDidUninstall, object: nil)
+    }
+
+    private var didUninstall = false
+
+    /// Scotch's files (and possibly the app itself) are gone, so quit for real:
+    /// AppKit won't terminate while a sheet is attached, and the usual cleanup
+    /// would recreate settings and catalog files that were just deleted.
+    @objc private func quitAfterUninstall() {
+        didUninstall = true
+        for window in NSApp.windows {
+            if let sheet = window.attachedSheet {
+                window.endSheet(sheet)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NSApp.terminate(nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            exit(0)
+        }
     }
 
     @objc private func pinAllWindowsGlass() {
@@ -39,7 +60,7 @@ final class ScotchAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let container = Self.sharedContainer else { return .terminateNow }
+        guard !didUninstall, let container = Self.sharedContainer else { return .terminateNow }
 
         let deadline = Date().addingTimeInterval(3.5)
         Task { @MainActor in

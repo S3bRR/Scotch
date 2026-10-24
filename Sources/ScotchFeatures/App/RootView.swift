@@ -12,6 +12,8 @@ public extension Notification.Name {
     static let scotchOpenExistingBottle = Notification.Name("scotchOpenExistingBottle")
     static let scotchClearShaderCaches = Notification.Name("scotchClearShaderCaches")
     static let scotchOpenFileInBottle = Notification.Name("scotchOpenFileInBottle")
+    /// Posted after a successful uninstall; the app delegate closes sheets and quits.
+    static let scotchDidUninstall = Notification.Name("scotchDidUninstall")
     static let scotchCLIInstallResult = Notification.Name("scotchCLIInstallResult")
 }
 
@@ -216,11 +218,18 @@ public struct RootView: View {
     private func sidebarRow(for bottle: BottleSummary) -> some View {
         if bottle.inFlight {
             VStack(alignment: .leading, spacing: 4) {
-                Text(bottle.settings.info.name)
+                HStack(spacing: 6) {
+                    Text(bottle.settings.info.name)
+                        .opacity(0.5)
+                    // The bar can sit still for minutes during wineboot; the
+                    // spinner shows the app is still working.
+                    ProgressView()
+                        .controlSize(.mini)
+                }
                 ProgressView(value: bottle.setupProgress, total: 1)
                     .tint(ScotchTheme.accent)
+                    .opacity(0.5)
             }
-            .opacity(0.5)
             .selectionDisabled(true)
         } else if let setupError = bottle.setupErrorMessage {
             VStack(alignment: .leading, spacing: 4) {

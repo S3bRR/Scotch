@@ -42,6 +42,9 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         extraEnvironment: [String: String]
     ) async throws {
         try await prepareBottleForLaunch(bottle)
+        if url.lastPathComponent.caseInsensitiveCompare("steam.exe") == .orderedSame {
+            await prepareSteamWebHelper(steamExecutable: url, bottle: bottle)
+        }
 
         try await runWineBundle(
             arguments: ["start", "/unix", url.path(percentEncoded: false)] + arguments,
@@ -304,6 +307,41 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
 
     public func killProcess(pid: Int, in bottle: BottleSummary) async throws {
         _ = try await runWine(arguments: ["taskkill.exe", "/PID", "\(pid)", "/F"], bottle: bottle, environment: [:])
+    }
+
+    /// Installs the single-process web helper launcher (see `SteamWebHelperLauncher`).
+    /// If that changed files under a Steam that is already running without it, asks
+    /// Steam to quit first so the launch below starts a fresh, visible instance.
+    private func prepareSteamWebHelper(steamExecutable: URL, bottle: BottleSummary) async {
+        guard let launcher = SteamWebHelperLauncher.bundled() else {
+            logger.warning("Steam web helper launcher is not bundled; Steam may show a black window")
+            return
+        }
+        let outcome: SteamWebHelperLauncher.Outcome
+        do {
+            outcome = try launcher.ensureInstalled(steamDirectory: steamExecutable.deletingLastPathComponent())
+        } catch {
+            logger.warning("Failed to install Steam web helper launcher: \(error.localizedDescription)")
+            return
+        }
+        guard outcome == .installed, await isSteamRunning(in: bottle) else { return }
+
+        logger.info("Restarting Steam in \(bottle.settings.info.name) to apply the web helper launcher")
+        _ = try? await runWineInternal(
+            arguments: [steamExecutable.path(percentEncoded: false), "-shutdown"],
+            bottle: bottle,
+            environment: [:]
+        )
+        var waited = 0
+        while waited < 30, await isSteamRunning(in: bottle) {
+            try? await Task.sleep(for: .seconds(1))
+            waited += 1
+        }
+    }
+
+    private func isSteamRunning(in bottle: BottleSummary) async -> Bool {
+        let processes = (try? await listProcesses(in: bottle)) ?? []
+        return processes.contains { $0.processName.caseInsensitiveCompare("steam.exe") == .orderedSame }
     }
 
     private func ensureRuntimeReady() throws {
