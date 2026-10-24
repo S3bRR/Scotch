@@ -20,6 +20,8 @@ public struct BottleSummary: Identifiable, Equatable, Sendable {
     public var inFlight: Bool
     public var setupProgress: Double
     public var setupErrorMessage: String?
+    /// Non-fatal problem during creation (e.g. corefonts failed); the bottle is still usable.
+    public var setupWarningMessage: String?
 
     public init(
         id: BottleID,
@@ -28,7 +30,8 @@ public struct BottleSummary: Identifiable, Equatable, Sendable {
         isAvailable: Bool,
         inFlight: Bool = false,
         setupProgress: Double = 0,
-        setupErrorMessage: String? = nil
+        setupErrorMessage: String? = nil,
+        setupWarningMessage: String? = nil
     ) {
         self.id = id
         self.directoryURL = directoryURL
@@ -37,6 +40,25 @@ public struct BottleSummary: Identifiable, Equatable, Sendable {
         self.inFlight = inFlight
         self.setupProgress = setupProgress
         self.setupErrorMessage = setupErrorMessage
+        self.setupWarningMessage = setupWarningMessage
+    }
+}
+
+public enum BottleSetupError: Error, LocalizedError, Sendable {
+    /// `wineboot --init` exited cleanly but the 32-bit (WoW64) half of the prefix
+    /// is missing or cannot run, so anything 32-bit (including winetricks' regedit) fails.
+    case wow64Unavailable(detail: String, logPath: String?)
+
+    public var errorDescription: String? {
+        switch self {
+        case .wow64Unavailable(let detail, let logPath):
+            var message = "Wine could not set up 32-bit Windows support in this bottle (\(detail)). "
+                + "Make sure Rosetta 2 is installed (softwareupdate --install-rosetta), restart Scotch, and try again."
+            if let logPath {
+                message += " Setup log: \(logPath)"
+            }
+            return message
+        }
     }
 }
 

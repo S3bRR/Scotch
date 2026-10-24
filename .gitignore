@@ -2,3 +2,4 @@
 .swiftpm/
 .release/
 .DS_Store
+Tests/

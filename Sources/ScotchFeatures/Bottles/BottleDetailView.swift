@@ -215,6 +215,7 @@ public struct BottleDetailView: View {
                     ForEach(pinned) { program in
                         PinTile(
                             program: program,
+                            isLaunching: viewModel.isLaunchingProgram(program),
                             onRun: { Task { await viewModel.runProgram(program) } },
                             onRunInTerminal: { Task { await viewModel.runProgramInTerminal(program) } },
                             onUnpin: { Task { await viewModel.unpin(program) } },
@@ -410,8 +411,22 @@ public struct BottleDetailView: View {
 
 // MARK: - PinTile
 
+private struct LaunchSpinner: View {
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.75)
+            .stroke(ScotchTheme.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(.linear(duration: 0.9).repeatForever(autoreverses: false), value: spinning)
+            .onAppear { spinning = true }
+    }
+}
+
 private struct PinTile: View {
     let program: ProgramRecord
+    let isLaunching: Bool
     let onRun: () -> Void
     let onRunInTerminal: () -> Void
     let onUnpin: () -> Void
@@ -422,12 +437,21 @@ private struct PinTile: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onRun) {
+        Button {
+            if !isLaunching { onRun() }
+        } label: {
             VStack(spacing: 8) {
                 ZStack {
                     AppIconView(url: program.executableURL)
                         .frame(width: 56, height: 56)
-                    if isHovered {
+                    if isLaunching {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(.black.opacity(0.35))
+                            .frame(width: 64, height: 64)
+                        // 75% of the 64pt tile, leaving 12.5% on each side.
+                        LaunchSpinner()
+                            .frame(width: 48, height: 48)
+                    } else if isHovered {
                         Circle()
                             .fill(.black.opacity(0.35))
                             .frame(width: 56, height: 56)

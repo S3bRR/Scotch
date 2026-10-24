@@ -11,9 +11,12 @@ mkdir -p "$OUT_DIR"
 
 cd "$ROOT_DIR"
 
-swift build -c release --product ScotchApp
-swift build -c release --product ScotchCmd
-swift build -c release --product ScotchThumbnail
+# Optional extra flags, e.g. SWIFT_BUILD_FLAGS="--build-system native" (the
+# configuration the 1.2.x releases are validated with).
+read -r -a EXTRA_BUILD_FLAGS <<< "${SWIFT_BUILD_FLAGS:-}"
+swift build -c release ${EXTRA_BUILD_FLAGS[@]+"${EXTRA_BUILD_FLAGS[@]}"} --product ScotchApp
+swift build -c release ${EXTRA_BUILD_FLAGS[@]+"${EXTRA_BUILD_FLAGS[@]}"} --product ScotchCmd
+swift build -c release ${EXTRA_BUILD_FLAGS[@]+"${EXTRA_BUILD_FLAGS[@]}"} --product ScotchThumbnail
 APP_BIN="$ROOT_DIR/.build/release/ScotchApp"
 CMD_BIN="$ROOT_DIR/.build/release/ScotchCmd"
 THUMBNAIL_BIN="$ROOT_DIR/.build/release/ScotchThumbnail"

@@ -146,7 +146,8 @@ public struct SettingsPanelView: View {
                     Task {
                         let shouldQuit = await viewModel.uninstallScotch()
                         if shouldQuit {
-                            NSApp.terminate(nil)
+                            dismiss()
+                            NotificationCenter.default.post(name: .scotchDidUninstall, object: nil)
                         }
                     }
                 }

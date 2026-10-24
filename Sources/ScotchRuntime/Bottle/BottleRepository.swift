@@ -111,6 +111,27 @@ public actor BottleRepository: BottleRepositoryProtocol {
             bottle: working,
             environment: [:]
         )
+        let bootLogURL = await runtimeService.latestLogURL(for: working)
+
+        // wineboot exits 0 even when its 32-bit (WoW64) install pass fails, which
+        // leaves syswow64 without regedit.exe and makes winetricks die later with
+        // "failed to open C:\windows\syswow64\regedit.exe" (status 53). Check here,
+        // try one `wineboot -u` repair pass, and otherwise fail with a clear error.
+        if let problem = await wow64Problem(in: working) {
+            logger.warning("WoW64 check failed after wineboot --init (\(problem)); retrying with wineboot -u")
+            _ = try? await runtimeService.runWine(
+                arguments: ["wineboot", "-u"],
+                bottle: working,
+                environment: [:]
+            )
+            if let problem = await wow64Problem(in: working) {
+                logger.error("WoW64 still unavailable after wineboot -u: \(problem)")
+                throw BottleSetupError.wow64Unavailable(
+                    detail: problem,
+                    logPath: bootLogURL?.path(percentEncoded: false)
+                )
+            }
+        }
 
         _ = try await runtimeService.runWine(
             arguments: ["winecfg", "-v", working.settings.wine.windowsVersion.rawValue],
@@ -139,6 +160,24 @@ public actor BottleRepository: BottleRepositoryProtocol {
         return working
     }
 
+    /// Returns nil when the prefix's 32-bit side is usable, otherwise a short reason.
+    func wow64Problem(in bottle: BottleSummary) async -> String? {
+        let syswow64 = bottle.directoryURL.appending(path: "drive_c/windows/syswow64")
+        for name in ["regedit.exe", "cmd.exe"] where !fileSystem.fileExists(at: syswow64.appending(path: name)) {
+            return "syswow64/\(name) is missing"
+        }
+        do {
+            _ = try await runtimeService.runWine(
+                arguments: [#"C:\windows\syswow64\cmd.exe"#, "/c", "exit"],
+                bottle: bottle,
+                environment: [:]
+            )
+            return nil
+        } catch {
+            return "32-bit test program failed to start"
+        }
+    }
+
     public func installBottleCoreFonts(
         _ summary: BottleSummary,
         progress: (@Sendable (Double) -> Void)?
@@ -146,9 +185,17 @@ public actor BottleRepository: BottleRepositoryProtocol {
         var working = summary
         let metadata = working.directoryURL.appending(path: BottleSettings.metadataFileName)
 
-        try await winetricksService.installCoreFonts(in: working) { [progress] fraction in
-            let overall = 0.5 + (fraction * 0.5)
-            progress?(overall)
+        // Fonts are nice-to-have: a failed download or verb must not throw away an
+        // otherwise working prefix. Keep the bottle and surface a warning instead.
+        do {
+            try await winetricksService.installCoreFonts(in: working) { [progress] fraction in
+                let overall = 0.5 + (fraction * 0.5)
+                progress?(overall)
+            }
+        } catch {
+            logger.warning("corefonts failed for \(working.settings.info.name): \(error.localizedDescription)")
+            working.setupWarningMessage = "Core fonts were not installed: \(error.localizedDescription) "
+                + "You can retry with Winetricks → corefonts."
         }
 
         // Write metadata BEFORE publishing the bottle path to the catalog. If

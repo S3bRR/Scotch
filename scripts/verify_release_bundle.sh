@@ -35,6 +35,7 @@ EXPECTED_FILES=(
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/cabextract"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libMoltenVK_shim.c"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libscotch_gpu_spoof.dylib"
+  "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/steamwebhelper_launcher.exe"
 )
 for file in "${EXPECTED_FILES[@]}"; do
   [[ -e "$file" ]] || { echo "Missing required artifact: $file"; exit 1; }

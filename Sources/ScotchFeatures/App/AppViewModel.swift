@@ -122,6 +122,9 @@ public final class AppViewModel: ObservableObject {
             }
             bottles.sort { $0.settings.info.name.lowercased() < $1.settings.info.name.lowercased() }
             selectedBottleID = final.id
+            if let warning = final.setupWarningMessage {
+                toastMessage = "Created \(final.settings.info.name). \(warning)"
+            }
             await container.installLedger.record(
                 path: final.directoryURL,
                 kind: .bottle,

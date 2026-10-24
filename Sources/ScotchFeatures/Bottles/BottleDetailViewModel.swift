@@ -8,6 +8,8 @@ public final class BottleDetailViewModel: ObservableObject {
     @Published public var bottle: BottleSummary
     @Published public var programs: [ProgramRecord] = []
     @Published public var isLaunching = false
+    /// Executables whose pinned tile shows a launch spinner.
+    @Published public private(set) var launchingProgramPaths: Set<String> = []
     @Published public var steamInstalled: Bool = false
     @Published public var isInstallingSteam: Bool = false
     @Published public var steamInstallProgress: Double = 0
@@ -212,8 +214,10 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     public func runProgram(_ program: ProgramRecord, arguments: [String] = [], environment: [String: String] = [:]) async {
+        let path = program.executableURL.path(percentEncoded: false)
+        launchingProgramPaths.insert(path)
+        defer { launchingProgramPaths.remove(path) }
         isLaunching = true
-        defer { isLaunching = false }
 
         do {
             let programArguments = program.settings.parsedArguments()
@@ -224,9 +228,29 @@ public final class BottleDetailViewModel: ObservableObject {
                 bottle: bottle,
                 extraEnvironment: mergedEnvironment
             )
+            isLaunching = false
             statusMessage = "Launched \(program.displayName)."
+            // `open` returns as soon as Wine starts; keep the tile's spinner until
+            // the program itself is running.
+            await waitForProcessStart(named: program.executableURL.lastPathComponent)
         } catch {
+            isLaunching = false
             statusMessage = "Launch failed: \(error.localizedDescription)"
+        }
+    }
+
+    public func isLaunchingProgram(_ program: ProgramRecord) -> Bool {
+        launchingProgramPaths.contains(program.executableURL.path(percentEncoded: false))
+    }
+
+    private func waitForProcessStart(named name: String, timeout: Duration = .seconds(30)) async {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            let processes = (try? await container.runtimeService.listProcesses(in: bottle)) ?? []
+            if processes.contains(where: { $0.processName.caseInsensitiveCompare(name) == .orderedSame }) {
+                return
+            }
+            try? await Task.sleep(for: .seconds(1))
         }
     }
 
