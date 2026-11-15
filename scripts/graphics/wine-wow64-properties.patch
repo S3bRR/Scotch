@@ -1,0 +1,36 @@
+--- a/dlls/winevulkan/vulkan_thunks.c
++++ b/dlls/winevulkan/vulkan_thunks.c
+@@ -67090,6 +67090,10 @@
+     TRACE("%#x, %#x\n", params->physicalDevice, params->pProperties);
+ 
+     init_conversion_context(ctx);
++    /* Keep the converted pNext chain alive across win32u's GPU-identity
++     * callbacks on the WoW64 Unix-call stack. A stack arena can be reused by
++     * the nested callback; the normal context cleanup frees these blocks. */
++    ctx->used = sizeof(ctx->buffer);
+     convert_VkPhysicalDeviceProperties2_win32_to_host(ctx, (VkPhysicalDeviceProperties232 *)UlongToPtr(params->pProperties), &pProperties_host);
+     vk_funcs->p_vkGetPhysicalDeviceProperties2((VkPhysicalDevice)UlongToPtr(params->physicalDevice), &pProperties_host);
+     convert_VkPhysicalDeviceProperties2_host_to_win32(&pProperties_host, (VkPhysicalDeviceProperties232 *)UlongToPtr(params->pProperties));
+@@ -67130,6 +67134,10 @@
+     TRACE("%#x, %#x\n", params->physicalDevice, params->pProperties);
+ 
+     init_conversion_context(ctx);
++    /* Keep the converted pNext chain alive across win32u's GPU-identity
++     * callbacks on the WoW64 Unix-call stack. A stack arena can be reused by
++     * the nested callback; the normal context cleanup frees these blocks. */
++    ctx->used = sizeof(ctx->buffer);
+     convert_VkPhysicalDeviceProperties2_win32_to_host(ctx, (VkPhysicalDeviceProperties232 *)UlongToPtr(params->pProperties), &pProperties_host);
+     vk_funcs->p_vkGetPhysicalDeviceProperties2KHR((VkPhysicalDevice)UlongToPtr(params->physicalDevice), &pProperties_host);
+     convert_VkPhysicalDeviceProperties2_host_to_win32(&pProperties_host, (VkPhysicalDeviceProperties232 *)UlongToPtr(params->pProperties));
+--- a/dlls/winevulkan/make_vulkan
++++ b/dlls/winevulkan/make_vulkan
+@@ -788,6 +788,9 @@
+                 body += "    if (params->{} == VK_NULL_HANDLE)\n".format(deferred_op)
+                 body += "    "
+             body += "    init_conversion_context(ctx);\n"
++            if conv and self.name in ("vkGetPhysicalDeviceProperties2", "vkGetPhysicalDeviceProperties2KHR"):
++                # win32u can call back while resolving the GPU identity on WoW64.
++                body += "    ctx->used = sizeof(ctx->buffer);\n"
+             if deferred_op is not None:
+                 body += "    else\n"
+                 body += "        ctx = &wine_deferred_operation_from_handle(params->{})->ctx;\n".format(deferred_op)

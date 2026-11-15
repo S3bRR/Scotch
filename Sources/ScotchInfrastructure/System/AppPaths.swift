@@ -2,6 +2,30 @@ import Foundation
 import ScotchDomain
 
 public struct AppPaths: Sendable {
+    public var runtimeDirectoryOverride: URL? = nil
+    public var usesMetalEngine = false
+
+    public var runtimeSetsDirectory: URL { applicationSupportDirectory.appending(path: "RuntimeSets") }
+    public var runtimeSelectionURL: URL { applicationSupportDirectory.appending(path: "RuntimeSelection.plist") }
+    public var defaultRuntimeSetID: String? {
+        guard let data = try? Data(contentsOf: runtimeSelectionURL),
+              let selection = try? PropertyListDecoder().decode(RuntimeSelection.self, from: data),
+              let id = selection.defaultSetID, ApprovedRuntimeSet.validID(id) else { return nil }
+        return id
+    }
+    public func forRuntimeSet(_ id: String?) -> AppPaths {
+        guard let id else { return self }
+        var resolved = self
+        resolved.runtimeDirectoryOverride = runtimeSetsDirectory.appending(path: ApprovedRuntimeSet.validID(id) ? id : "invalid-selection")
+        return resolved
+    }
+    public func forBottle(_ bottle: BottleSummary) -> AppPaths {
+        var selected = forRuntimeSet(bottle.settings.runtimeSetID)
+        // One matched engine supports all backends. Steam's helper needs its
+        // cross-process surface fix even when its games use DXVK or Zink.
+        selected.usesMetalEngine = true
+        return selected
+    }
     public let bundleIdentifier: String
     public let applicationSupportDirectory: URL
     public let logsDirectory: URL
@@ -12,7 +36,7 @@ public struct AppPaths: Sendable {
     public let savedStateDirectory: URL
 
     public var librariesDirectory: URL {
-        applicationSupportDirectory.appending(path: "Libraries")
+        runtimeDirectoryOverride ?? applicationSupportDirectory.appending(path: "Libraries")
     }
 
     public var runtimeManifestURL: URL {
@@ -81,19 +105,23 @@ public struct AppPaths: Sendable {
     }
 
     public var wineBundleURL: URL {
-        librariesDirectory.appending(path: "Wine.app")
+        wineRootDirectory.deletingLastPathComponent().appending(path: "Wine.app")
+    }
+
+    public var wineRootDirectory: URL {
+        librariesDirectory.appending(path: usesMetalEngine ? "MetalEngine/Engine" : "Wine")
     }
 
     public var wineBinaryURL: URL {
-        librariesDirectory.appending(path: "Wine/bin/wine")
+        wineRootDirectory.appending(path: "bin/wine")
     }
 
     public var wineServerBinaryURL: URL {
-        librariesDirectory.appending(path: "Wine/bin/wineserver")
+        wineRootDirectory.appending(path: "bin/wineserver")
     }
 
     public var runtimeBinDirectory: URL {
-        librariesDirectory.appending(path: "Wine/bin")
+        wineRootDirectory.appending(path: "bin")
     }
 
     public var winetricksScriptURL: URL {

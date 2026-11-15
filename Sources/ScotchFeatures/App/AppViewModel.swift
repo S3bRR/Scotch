@@ -26,6 +26,11 @@ public final class AppViewModel: ObservableObject {
     @Published public var isBusy: Bool = false
     @Published public var toastMessage: String?
     @Published public var overlayDrifts: [OverlayDrift] = []
+    @Published public var appUpdateAvailable: String?
+    @Published public var needsGraphicsRepair = false
+    @Published public var availableRuntime: ApprovedRuntimeSet?
+    @Published public var runtimeUpdateMessage = "Check for approved runtime updates."
+    @Published public var isCheckingRuntime = false
     @Published public var runtimeUpdateVersion: AppVersion?
 
     public let container: ScotchContainer
@@ -39,14 +44,9 @@ public final class AppViewModel: ObservableObject {
         setupStage = .checking
         appSettings = await container.settingsStore.loadSettings()
         runtimeManifest = await container.runtimeInstaller.currentManifest()
-        if appSettings.checkRuntimeUpdates {
-            let update = await container.runtimeInstaller.shouldUpdateRuntime()
-            runtimeUpdateVersion = update.0 ? update.1 : nil
-            overlayDrifts = await container.runtimeInstaller.overlayDrifts()
-        } else {
-            runtimeUpdateVersion = nil
-            overlayDrifts = []
-        }
+        // Version differences alone do not establish an available download.
+        needsGraphicsRepair = await container.runtimeInstaller.needsGraphicsRepair()
+        overlayDrifts = []
         await container.installLedger.seedKnownRoots()
         await container.logStore.pruneLogs(olderThan: 7)
         await refreshBottles()
@@ -81,6 +81,8 @@ public final class AppViewModel: ObservableObject {
     }
 
     public func createBottle(name: String, windowsVersion: WindowsVersion, location: URL? = nil) async {
+        guard let lease = try? UpdateActivity.shared.beginOperation() else { toastMessage = "An update is being installed."; return }
+        defer { withExtendedLifetime(lease) {} }
         isBusy = true
         defer { isBusy = false }
 
@@ -254,6 +256,7 @@ public final class AppViewModel: ObservableObject {
     public func saveSettings(_ settings: AppSettings) async {
         appSettings = settings
         await container.settingsStore.saveSettings(settings)
+        NotificationCenter.default.post(name: .scotchUpdatePreferencesChanged, object: settings.checkRuntimeUpdates)
         let bottleRoot = URL(fileURLWithPath: settings.defaultBottleDirectoryPath)
         await container.installLedger.record(
             path: bottleRoot,
@@ -280,6 +283,8 @@ public final class AppViewModel: ObservableObject {
                 toastMessage = "GStreamer.framework is not installed. Wine 11.16 uses it for media; games using DXVK/DXMT/D3DMetal still run. Install the official GStreamer runtime if videos fail."
             }
 
+            let lease = try UpdateActivity.shared.acquireMaintenance()
+            defer { withExtendedLifetime(lease) {} }
             setupStage = .fetchingRuntime
             let releases = try await container.runtimeInstaller.fetchLatestReleases()
             setupStage = .downloadingRuntime(0)
@@ -290,16 +295,50 @@ public final class AppViewModel: ObservableObject {
             }
 
             setupStage = .installingRuntime
-            let (manifest, _) = try await container.runtimeInstaller.installAll(from: archives)
+            let (manifest, overlays) = try await container.runtimeInstaller.installAll(from: archives)
             runtimeManifest = manifest
             runtimeUpdateVersion = nil
-            overlayDrifts = await container.runtimeInstaller.overlayDrifts()
+            overlayDrifts = []
+            needsGraphicsRepair = await container.runtimeInstaller.needsGraphicsRepair()
             showSetupSheet = false
             setupStage = .ready
+            NotificationCenter.default.post(name: .scotchBottleRuntimeChanged, object: nil)
             await container.installLedger.seedKnownRoots()
-            toastMessage = "Runtime installation complete."
+            let warnings = overlays.compactMap { overlay -> String? in
+                guard let message = overlay.errorMessage else { return nil }
+                return "\(overlay.component.displayName): \(message)"
+            }
+            toastMessage = warnings.isEmpty
+                ? "Runtime installation complete."
+                : "Runtime installation complete. \(warnings.joined(separator: " ")) Zink, DXVK, and DXMT are available."
         } catch {
             setupStage = .failed(error.localizedDescription)
+        }
+    }
+
+    public func checkRuntimeUpdates(force: Bool = false) async {
+        needsGraphicsRepair = await container.runtimeInstaller.needsGraphicsRepair()
+        guard !isCheckingRuntime else { return }
+        isCheckingRuntime = true
+        defer { isCheckingRuntime = false }
+        do {
+            switch try await container.runtimeUpdates.check(force: force) {
+            case .current:
+                availableRuntime = nil
+                runtimeUpdateMessage = "No newer approved runtime is available."
+            case .available(let target):
+                availableRuntime = target
+                runtimeUpdateMessage = "An approved runtime update is available."
+            case .repair(let target):
+                availableRuntime = target
+                runtimeUpdateMessage = "The installed runtime needs repair. Use Update to repair it without changing bottles."
+            case .incompatible(let reason):
+                availableRuntime = nil
+                runtimeUpdateMessage = reason
+            }
+        } catch {
+            availableRuntime = nil
+            runtimeUpdateMessage = error.localizedDescription
         }
     }
 

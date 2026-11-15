@@ -30,16 +30,24 @@ if [[ -f "$INFO_PLIST" ]]; then
   [[ "$MIN_OS" == "26.0" ]] || { echo "Expected LSMinimumSystemVersion 26.0, got: ${MIN_OS:-missing}"; exit 1; }
 fi
 
+# Authenticated updater and bundled helpers must survive custom packaging.
+[[ -d "$APP_BUNDLE_PATH/Contents/Frameworks/Sparkle.framework" ]] || { echo "Missing Sparkle.framework"; exit 1; }
+/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" >/dev/null
+/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" >/dev/null
 # Resource presence checks.
 EXPECTED_FILES=(
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/cabextract"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libMoltenVK_shim.c"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/libscotch_gpu_spoof.dylib"
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/steamwebhelper_launcher.exe"
+  "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/GraphicsSupport.tar.xz"
+  "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/SourceAvailability.txt"
 )
 for file in "${EXPECTED_FILES[@]}"; do
   [[ -e "$file" ]] || { echo "Missing required artifact: $file"; exit 1; }
 done
+"$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle/cabextract" --version >/dev/null
+echo "Bundled cabextract: executable"
 
 bash "$ROOT_DIR/scripts/test_relocated_resources.sh" \
   "$APP_BUNDLE_PATH/Contents/Resources/Scotch_ScotchRuntime.bundle"

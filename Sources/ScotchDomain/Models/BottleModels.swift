@@ -100,6 +100,10 @@ public struct ProgramSettings: Codable, Equatable, Hashable, Sendable {
     public var locale: ProgramLocale
     public var arguments: String
     public var environment: [String: String]
+    public var graphicsMode: ProgramGraphicsMode = .bottle
+    public var manualBackend: TranslationBackend = .dxvk
+    public var confirmedGraphics: ProgramGraphicsChoice?
+    public var lastGraphicsLaunch: ProgramGraphicsChoice?
 
     public init(locale: ProgramLocale = .auto, arguments: String = "", environment: [String: String] = [:]) {
         self.locale = locale
@@ -111,14 +115,23 @@ public struct ProgramSettings: Codable, Equatable, Hashable, Sendable {
         case locale
         case arguments
         case environment
+        case graphicsMode, manualBackend, confirmedGraphics, lastGraphicsLaunch, schemaVersion
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schema = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+        guard schema <= 1 else {
+            throw DecodingError.dataCorruptedError(forKey: .schemaVersion, in: container, debugDescription: "This program's settings require a newer Scotch version.")
+        }
         let localeRaw = try container.decodeIfPresent(String.self, forKey: .locale) ?? ""
         locale = ProgramLocale(rawValue: localeRaw) ?? .auto
         arguments = try container.decodeIfPresent(String.self, forKey: .arguments) ?? ""
         environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        graphicsMode = try container.decodeIfPresent(ProgramGraphicsMode.self, forKey: .graphicsMode) ?? .bottle
+        manualBackend = try container.decodeIfPresent(TranslationBackend.self, forKey: .manualBackend) ?? .dxvk
+        confirmedGraphics = try container.decodeIfPresent(ProgramGraphicsChoice.self, forKey: .confirmedGraphics)
+        lastGraphicsLaunch = try container.decodeIfPresent(ProgramGraphicsChoice.self, forKey: .lastGraphicsLaunch)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -126,6 +139,11 @@ public struct ProgramSettings: Codable, Equatable, Hashable, Sendable {
         try container.encode(locale.rawValue, forKey: .locale)
         try container.encode(arguments, forKey: .arguments)
         try container.encode(environment, forKey: .environment)
+        try container.encode(1, forKey: .schemaVersion)
+        try container.encode(graphicsMode, forKey: .graphicsMode)
+        try container.encode(manualBackend, forKey: .manualBackend)
+        try container.encodeIfPresent(confirmedGraphics, forKey: .confirmedGraphics)
+        try container.encodeIfPresent(lastGraphicsLaunch, forKey: .lastGraphicsLaunch)
     }
 
     public func parsedArguments() -> [String] {

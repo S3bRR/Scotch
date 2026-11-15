@@ -1,0 +1,23 @@
+name: Discover runtime candidates
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 9 * * 4'
+permissions:
+  contents: read
+jobs:
+  discover:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Discover and verify upstream downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/updates/discover.py --download --output candidate-report.json
+      - name: Verify installer and update recovery behavior
+        run: bash scripts/test_updates.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runtime-candidates
+          path: candidate-report.json
+          retention-days: 30

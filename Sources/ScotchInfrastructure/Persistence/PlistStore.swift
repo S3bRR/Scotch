@@ -1,4 +1,5 @@
 import Foundation
+import ScotchDomain
 
 public actor PlistStore {
     public init() {}
@@ -8,7 +9,11 @@ public actor PlistStore {
         return try PropertyListDecoder().decode(T.self, from: data)
     }
 
-    public func write<T: Encodable>(_ value: T, to url: URL) throws {
+    public func write<T: Codable>(_ value: T, to url: URL) throws {
+        if FileManager.default.fileExists(atPath: url.path),
+           ([BottleSettings.metadataFileName, BottleCatalog.fileName, BottleCatalog.alternateFileName, AppSettings.fileName].contains(url.lastPathComponent) || url.deletingLastPathComponent().lastPathComponent == "Program Settings") {
+            _ = try read(T.self, from: url)
+        }
         let directory = url.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

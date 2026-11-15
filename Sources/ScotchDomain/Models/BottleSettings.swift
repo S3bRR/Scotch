@@ -133,6 +133,8 @@ public struct BottleMetalConfig: Codable, Equatable, Sendable {
 
 public struct BottleBackendConfig: Codable, Equatable, Sendable {
     public var backend: TranslationBackend
+    /// Auto is a selection policy; backend remains the actual installed renderer.
+    public var automatic: Bool
     public var dxvkAsync: Bool
     public var dxvkHud: DXVKHUD
     public var glZinkEnabled: Bool
@@ -140,12 +142,14 @@ public struct BottleBackendConfig: Codable, Equatable, Sendable {
 
     public init(
         backend: TranslationBackend = .dxvk,
+        automatic: Bool = true,
         dxvkAsync: Bool = true,
         dxvkHud: DXVKHUD = .off,
         glZinkEnabled: Bool = false,
         steamBuiltinOpenGL: Bool = false
     ) {
         self.backend = backend
+        self.automatic = automatic
         self.dxvkAsync = dxvkAsync
         self.dxvkHud = dxvkHud
         self.glZinkEnabled = glZinkEnabled
@@ -154,6 +158,7 @@ public struct BottleBackendConfig: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case backend
+        case automatic
         case dxvkAsync
         case dxvkHud
         case glZinkEnabled
@@ -163,6 +168,9 @@ public struct BottleBackendConfig: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // Existing bottles keep the renderer the user chose before Auto existed.
+        automatic = try container.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
 
         if let rawBackend = try container.decodeIfPresent(String.self, forKey: .backend) {
             backend = TranslationBackend(rawValue: rawBackend) ?? .dxvk
@@ -181,6 +189,7 @@ public struct BottleBackendConfig: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(backend.rawValue, forKey: .backend)
+        try container.encode(automatic, forKey: .automatic)
         try container.encode(dxvkAsync, forKey: .dxvkAsync)
         try container.encode(dxvkHud, forKey: .dxvkHud)
         try container.encode(glZinkEnabled, forKey: .glZinkEnabled)
@@ -256,8 +265,9 @@ public struct BottleGPUConfig: Codable, Equatable, Sendable {
 
 public struct BottleSettings: Codable, Equatable, Sendable {
     public static let metadataFileName = "Metadata.plist"
-    public static let currentFileVersion = AppVersion(1, 0, 0)
+    public static let currentFileVersion = AppVersion(1, 2, 0)
 
+    public var runtimeSetID: String? = nil
     public var fileVersion: AppVersion
     public var info: BottleInfo
     public var wine: BottleWineConfig
@@ -283,6 +293,7 @@ public struct BottleSettings: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case fileVersion
+        case runtimeSetID
         case info
         case wine
         case wineConfig
@@ -300,6 +311,13 @@ public struct BottleSettings: Codable, Equatable, Sendable {
 
         fileVersion = try container.decodeIfPresent(AppVersion.self, forKey: .fileVersion)
             ?? BottleSettings.currentFileVersion
+        guard fileVersion <= Self.currentFileVersion else {
+            throw DecodingError.dataCorruptedError(forKey: .fileVersion, in: container, debugDescription: "This bottle requires a newer Scotch version. Metadata was preserved.")
+        }
+        runtimeSetID = try container.decodeIfPresent(String.self, forKey: .runtimeSetID)
+        if let runtimeSetID, !ApprovedRuntimeSet.validID(runtimeSetID) {
+            throw DecodingError.dataCorruptedError(forKey: .runtimeSetID, in: container, debugDescription: "Invalid runtime selection")
+        }
         info = try container.decodeIfPresent(BottleInfo.self, forKey: .info) ?? BottleInfo()
 
         if let wine = try container.decodeIfPresent(BottleWineConfig.self, forKey: .wine) {
@@ -337,6 +355,7 @@ public struct BottleSettings: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(fileVersion, forKey: .fileVersion)
+        try container.encodeIfPresent(runtimeSetID, forKey: .runtimeSetID)
         try container.encode(info, forKey: .info)
         try container.encode(wine, forKey: .wineConfig)
         try container.encode(metal, forKey: .metalConfig)

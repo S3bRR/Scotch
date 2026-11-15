@@ -1,0 +1,36 @@
+name: Publish approved update feeds
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: update-feeds
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify signed runtime metadata and public assets
+        run: |
+          bash scripts/test_updates.sh --feed-only
+          python3 scripts/updates/verify_public_assets.py --appcast updates/appcast.xml --runtime updates/runtime.json
+      - name: Stage only public signed feeds
+        run: |
+          mkdir -p updates-site/updates
+          cp updates/appcast.xml updates/runtime.json updates-site/updates/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: updates-site
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy validated feeds
+        id: deployment
+        uses: actions/deploy-pages@v5

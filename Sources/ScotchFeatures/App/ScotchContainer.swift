@@ -12,6 +12,7 @@ public final class ScotchContainer: Sendable {
     public let logStore: LogStore
     public let networkClient: NetworkClient
 
+    public let runtimeUpdates: RuntimeUpdateService
     public let runtimeInstaller: RuntimeInstallerProtocol
     public let runtimeService: WineRuntimeServiceProtocol
     public let bottleRepository: BottleRepositoryProtocol
@@ -23,13 +24,13 @@ public final class ScotchContainer: Sendable {
     public let uninstallService: UninstallServiceProtocol
     public let installLedger: InstallLedgerProtocol
 
-    public init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.s3brr.Scotch") {
+    public init(bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.s3brr.Scotch", runtimeFeedURL: URL = UpdateConfiguration.runtimeFeedURL) {
         let paths = AppPaths(bundleIdentifier: bundleIdentifier)
         let fileSystem = LocalFileSystem()
         let plistStore = PlistStore()
         let logger = DefaultAppLogger(subsystem: bundleIdentifier, category: "Scotch")
         LegacyDataMigrator(paths: paths, fileSystem: fileSystem, logger: logger).migrateIfNeeded()
-        let processRunner = DefaultProcessRunner()
+        let processRunner = ActivityTrackingProcessRunner()
         let logStore = LogStore(logsDirectory: paths.logsDirectory)
         let networkClient = DefaultNetworkClient()
         let environmentAssembler = EnvironmentAssembler(paths: paths)
@@ -49,6 +50,7 @@ public final class ScotchContainer: Sendable {
         self.processRunner = processRunner
         self.logStore = logStore
         self.networkClient = networkClient
+        self.runtimeUpdates = RuntimeUpdateService(paths: paths, network: networkClient, logger: logger, feedURL: runtimeFeedURL)
 
         self.runtimeService = runtimeService
         self.winetricksService = WinetricksService(
@@ -62,7 +64,7 @@ public final class ScotchContainer: Sendable {
             fileSystem: fileSystem,
             logger: logger,
             plistStore: plistStore,
-            processRunner: processRunner,
+            processRunner: DefaultProcessRunner(),
             networkClient: networkClient
         )
         self.bottleRepository = BottleRepository(
@@ -122,6 +124,7 @@ public final class ScotchContainer: Sendable {
         self.processRunner = processRunner
         self.logStore = logStore
         self.networkClient = networkClient
+        self.runtimeUpdates = RuntimeUpdateService(paths: paths, network: networkClient, logger: logger)
         self.runtimeInstaller = runtimeInstaller
         self.runtimeService = runtimeService
         self.bottleRepository = bottleRepository

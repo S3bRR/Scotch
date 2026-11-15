@@ -50,6 +50,8 @@ public protocol RuntimeInstallerProtocol: Sendable {
     func installAll(from archives: DownloadedRuntimeArchives) async throws -> (RuntimeManifest, [OverlayInstallResult])
     func shouldUpdateRuntime() async -> (Bool, AppVersion)
     func overlayDrifts() async -> [OverlayDrift]
+    func needsGraphicsRepair() async -> Bool
+    func repairGraphics() async throws
 }
 
 public protocol WineRuntimeServiceProtocol: Sendable {
@@ -59,6 +61,7 @@ public protocol WineRuntimeServiceProtocol: Sendable {
     func runBatchFile(at url: URL, bottle: BottleSummary, extraEnvironment: [String: String]) async throws
     func runGUITool(arguments: [String], bottle: BottleSummary) async throws
     func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String]) async throws -> String
+    func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String], timeout: TimeInterval?) async throws -> String
     func runWineServer(arguments: [String], bottle: BottleSummary) async throws -> String
     func syncCompatibilityState(for bottle: BottleSummary) async
     func killBottle(_ bottle: BottleSummary, timeout: TimeInterval?) async
@@ -72,6 +75,9 @@ public protocol WineRuntimeServiceProtocol: Sendable {
 }
 
 public extension WineRuntimeServiceProtocol {
+    func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String], timeout: TimeInterval?) async throws -> String {
+        try await runWine(arguments: arguments, bottle: bottle, environment: environment)
+    }
     func killBottle(_ bottle: BottleSummary) async {
         await killBottle(bottle, timeout: nil)
     }

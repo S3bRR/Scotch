@@ -2,4 +2,6 @@
 .swiftpm/
 .release/
 .DS_Store
+__pycache__/
+*.dxvk-cache
 Tests/

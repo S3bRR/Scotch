@@ -29,6 +29,8 @@ public actor WinetricksService: WinetricksServiceProtocol {
     }
 
     public func ensureInstalled() async throws {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         if fileSystem.fileExists(at: paths.winetricksScriptURL) {
             return
         }
@@ -57,6 +59,8 @@ public actor WinetricksService: WinetricksServiceProtocol {
     }
 
     public func parseVerbs() async throws -> [WinetricksCategoryListing] {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         try await ensureInstalled()
         let output = try await runHeadless(arguments: ["list-all"], bottle: nil)
         let categories = parseListAllOutput(output)
@@ -67,11 +71,14 @@ public actor WinetricksService: WinetricksServiceProtocol {
     }
 
     public func run(command: String, in bottle: BottleSummary, mode: WinetricksExecutionMode) async throws -> String {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCommand.isEmpty else {
             return ""
         }
 
+        try BottleEngineMigration.prepare(bottle, paths: paths)
         switch mode {
         case .headless:
             let arguments = trimmedCommand.split(whereSeparator: \.isWhitespace).map(String.init)
@@ -86,6 +93,8 @@ public actor WinetricksService: WinetricksServiceProtocol {
         in bottle: BottleSummary,
         progress: (@Sendable (Double) -> Void)?
     ) async throws {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         try await ensureInstalled()
         let total = Double(Self.coreFontVerbs.count)
 
@@ -132,7 +141,13 @@ public actor WinetricksService: WinetricksServiceProtocol {
 
     func baseEnvironment(for bottle: BottleSummary?) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
-        var pathSegments: [String] = [paths.runtimeBinDirectory.path(percentEncoded: false)]
+        let selected = bottle.map { paths.forBottle($0) } ?? paths
+        if let bottle {
+            environment.merge(EnvironmentAssembler(paths: selected).makeWineEnvironment(bottle: bottle), uniquingKeysWith: { _, value in value })
+        }
+        // Assemble Wine first: its PATH must not overwrite the directory of
+        // our bundled cabextract, especially when launched from Finder.
+        var pathSegments: [String] = [selected.runtimeBinDirectory.path(percentEncoded: false)]
 
         if let cabextractDirectory = resolveCabextractDirectory() {
             pathSegments.append(cabextractDirectory.path(percentEncoded: false))
@@ -142,20 +157,18 @@ public actor WinetricksService: WinetricksServiceProtocol {
             pathSegments.append(existingPath)
         }
         environment["PATH"] = pathSegments.joined(separator: ":")
-        environment["WINE"] = "wine"
         environment["WINETRICKS_GUI"] = "none"
         environment["W_OPT_UNATTENDED"] = "1"
         environment["W_CACHE"] = paths.winetricksCacheDirectory.path(percentEncoded: false)
-
-        if let bottle {
-            environment["WINEPREFIX"] = bottle.directoryURL.path(percentEncoded: false)
-        }
+        environment["WINE"] = selected.wineBinaryURL.path(percentEncoded: false)
+        environment["WINESERVER"] = selected.wineServerBinaryURL.path(percentEncoded: false)
 
         return environment
     }
 
     private func runHeadless(arguments: [String], bottle: BottleSummary?, timeout: TimeInterval? = nil) async throws -> String {
         try await ensureInstalled()
+        if let bottle { try BottleEngineMigration.prepare(bottle, paths: paths) }
 
         let spec = ProcessSpecification(
             executableURL: URL(fileURLWithPath: "/bin/bash"),
@@ -203,9 +216,12 @@ public actor WinetricksService: WinetricksServiceProtocol {
 
     private func makeTerminalCommand(command: String, bottle: BottleSummary) -> String {
         let environment = baseEnvironment(for: bottle)
-        let path = environment["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
-        let winePrefix = bottle.directoryURL.path(percentEncoded: false)
-        return "PATH=\(path.shellEscaped) WINE=wine WINEPREFIX=\(winePrefix.shellEscaped) \(paths.winetricksScriptURL.path(percentEncoded: false).shellEscaped) \(command)"
+        // Export the same controlled environment as headless execution. In
+        // particular, do not fall back to a different wine/wineserver on PATH.
+        let controlledKeys = Set(EnvironmentAssembler(paths: paths).makeWineEnvironment(bottle: bottle).keys)
+            .union(["PATH", "WINE", "WINESERVER", "WINETRICKS_GUI", "W_OPT_UNATTENDED", "W_CACHE"])
+        let exports = EnvironmentAssembler(paths: paths).launchEnvironmentFileContents(environment.filter { controlledKeys.contains($0.key) })
+        return exports + "/bin/bash \(paths.winetricksScriptURL.path(percentEncoded: false).shellEscaped) \(command)"
     }
 
     private func resolveCabextractDirectory() -> URL? {

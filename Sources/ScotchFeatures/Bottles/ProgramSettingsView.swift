@@ -9,20 +9,29 @@ private struct EnvironmentEntry: Identifiable, Hashable {
 
 struct ProgramSettingsView: View {
     let program: ProgramRecord
-    let onSave: (ProgramSettings) -> Void
-    let onRun: (ProgramSettings) -> Void
+    let onSave: (ProgramSettings) async -> Bool
+    let onRun: (ProgramSettings) async -> Void
+    let onRecommend: (ProgramSettings) async -> ProgramGraphicsRecommendation
+    let onRememberWorking: (ProgramSettings) async throws -> ProgramSettings
 
     @State private var settings: ProgramSettings
     @State private var environmentEntries: [EnvironmentEntry]
+    @State private var recommendation: ProgramGraphicsRecommendation?
+    @State private var working = false
+    @State private var message: String?
 
     init(
         program: ProgramRecord,
-        onSave: @escaping (ProgramSettings) -> Void,
-        onRun: @escaping (ProgramSettings) -> Void
+        onSave: @escaping (ProgramSettings) async -> Bool,
+        onRun: @escaping (ProgramSettings) async -> Void,
+        onRecommend: @escaping (ProgramSettings) async -> ProgramGraphicsRecommendation,
+        onRememberWorking: @escaping (ProgramSettings) async throws -> ProgramSettings
     ) {
         self.program = program
         self.onSave = onSave
         self.onRun = onRun
+        self.onRecommend = onRecommend
+        self.onRememberWorking = onRememberWorking
 
         let initialSettings = program.settings
         _settings = State(initialValue: initialSettings)
@@ -53,6 +62,56 @@ struct ProgramSettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                 }
+            }
+
+            Section("Graphics") {
+                Picker("Backend selection", selection: $settings.graphicsMode) {
+                    ForEach(ProgramGraphicsMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                if settings.graphicsMode == .manual {
+                    Picker("Backend", selection: $settings.manualBackend) {
+                        ForEach(TranslationBackend.allCases, id: \.self) { backend in
+                            Text(backend.displayName).tag(backend)
+                        }
+                    }
+                }
+                if let recommendation {
+                    LabeledContent("Architecture", value: recommendation.analysis.architecture.rawValue)
+                    LabeledContent("Detected graphics", value: recommendation.analysis.apis.isEmpty ? "Unknown" : recommendation.analysis.apis.map(\.rawValue).sorted().joined(separator: ", "))
+                    if recommendation.usesAuto && !recommendation.automatic {
+                        Text("Auto → \(recommendation.currentBackend.displayName) (Bottle Setting)").fontWeight(.medium)
+                    }
+                    if let backend = recommendation.backend {
+                        Text(recommendation.usesAuto && recommendation.automatic ? "Auto → \(backend.displayName)" : "\(settings.graphicsMode == .manual ? "Selected" : "Suggested"): \(backend.displayName)")
+                            .fontWeight(.medium)
+                    }
+                    Text(recommendation.reason).font(.caption).foregroundStyle(.secondary)
+                    if let issue = recommendation.availabilityIssue { Text(issue).font(.caption).foregroundStyle(.orange) }
+                } else { ProgressView("Inspecting executable and graphics dependencies…") }
+                if let confirmed = settings.confirmedGraphics {
+                    LabeledContent("Confirmed working", value: confirmed.backend.displayName)
+                    Button("Forget Working Choice") {
+                        settings.confirmedGraphics = nil
+                        message = "Save to forget this confirmation. Your manual choice is preserved."
+                    }
+                }
+                Button("Remember Most Recent Launch as Working") {
+                    working = true
+                    Task {
+                        defer { working = false }
+                        do {
+                            syncEnvironmentEntries()
+                            settings = try await onRememberWorking(settings)
+                            recommendation = await onRecommend(settings)
+                            message = "Remembered the last launch setup. Auto can reuse it for this application and runtime."
+                        } catch { message = error.localizedDescription }
+                    }
+                }
+                Text("Confirm only after checking the application's window and rendering. Launching alone does not prove it works. Backend changes require idle Wine processes and a full bottle backup, including installed games. Large bottles need free space.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let message { Text(message).font(.caption).textSelection(.enabled) }
             }
 
             Section {
@@ -86,24 +145,37 @@ struct ProgramSettingsView: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .navigationTitle(program.displayName)
+        .disabled(working)
+        .task(id: "\(settings.graphicsMode.rawValue):\(settings.manualBackend.rawValue):\(settings.confirmedGraphics?.hashValue ?? 0)") {
+            recommendation = await onRecommend(settings)
+        }
         .bottomBar {
             HStack {
                 Spacer()
                 Button("Save") {
-                    syncEnvironmentEntries()
-                    onSave(settings)
+                    save(run: false)
                 }
                 .buttonStyle(.glass)
 
                 Button("Save & Run") {
-                    syncEnvironmentEntries()
-                    onSave(settings)
-                    onRun(settings)
+                    save(run: true)
                 }
                 .buttonStyle(.glass)
                 .tint(ScotchTheme.accent)
             }
             .padding()
+        }
+    }
+
+    private func save(run: Bool) {
+        guard !working else { return }
+        syncEnvironmentEntries()
+        working = true
+        Task {
+            defer { working = false }
+            guard await onSave(settings) else { message = "Settings could not be saved. The application was not launched."; return }
+            message = "Settings saved."
+            if run { await onRun(settings) }
         }
     }
 

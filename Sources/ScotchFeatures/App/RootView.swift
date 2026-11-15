@@ -4,6 +4,11 @@ import UniformTypeIdentifiers
 import ScotchDomain
 
 public extension Notification.Name {
+    static let scotchUpdateAvailable = Notification.Name("scotchUpdateAvailable")
+    static let scotchUpdatePreferencesChanged = Notification.Name("scotchUpdatePreferencesChanged")
+    static let scotchBottleRuntimeChanged = Notification.Name("scotchBottleRuntimeChanged")
+    static let scotchUpdate = Notification.Name("scotchUpdate")
+    static let scotchAppUpdateStatus = Notification.Name("scotchAppUpdateStatus")
     static let scotchOpenSetup = Notification.Name("scotchOpenSetup")
     static let scotchOpenSettings = Notification.Name("scotchOpenSettings")
     static let scotchOpenDiagnostics = Notification.Name("scotchOpenDiagnostics")
@@ -35,13 +40,18 @@ public struct RootView: View {
         _viewModel = StateObject(wrappedValue: AppViewModel(container: container))
     }
 
-    public var body: some View {
+    private var navigationContent: some View {
         NavigationSplitView {
             sidebar
         } detail: {
             detail
         }
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Update") { NotificationCenter.default.post(name: .scotchUpdate, object: nil) } } }
         .disabled(viewModel.isBusy)
+    }
+
+    private var modalContent: some View {
+        navigationContent
         .sheet(isPresented: $showCreateBottle) {
             BottleCreationSheet(viewModel: viewModel)
         }
@@ -73,11 +83,26 @@ public struct RootView: View {
         .sheet(isPresented: $viewModel.showSetupSheet) {
             SetupSheetView(viewModel: viewModel)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .scotchUpdateAvailable)) { notification in
+            viewModel.appUpdateAvailable = notification.object as? String
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .scotchAppUpdateStatus)) { notification in
+            viewModel.toastMessage = notification.object as? String
+        }
+    }
+
+    private var eventContent: some View {
+        modalContent
         .task {
             await viewModel.bootstrap()
             didFinishBootstrap = true
             await processQueuedExternalOpens()
+            while !Task.isCancelled {
+                if viewModel.appSettings.checkRuntimeUpdates { await viewModel.checkRuntimeUpdates() }
+                try? await Task.sleep(for: .seconds(3600))
+            }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .scotchBottleRuntimeChanged)) { _ in Task { await viewModel.refreshBottles(); await viewModel.checkRuntimeUpdates() } }
         .onOpenURL { url in
             Task { await handleExternalOpen(url) }
         }
@@ -136,6 +161,10 @@ public struct RootView: View {
                     }
             }
         }
+    }
+
+    public var body: some View {
+        eventContent
         .alert(
             "Rename Bottle",
             isPresented: Binding(
@@ -298,7 +327,7 @@ public struct RootView: View {
     private var detail: some View {
         if let bottle = viewModel.selectedBottle() {
             VStack(alignment: .leading, spacing: 0) {
-                if viewModel.runtimeUpdateVersion != nil || !viewModel.overlayDrifts.isEmpty {
+                if viewModel.needsGraphicsRepair || viewModel.availableRuntime != nil || viewModel.appUpdateAvailable != nil {
                     driftBanner
                 }
                 BottleDetailView(container: viewModel.container, bottle: bottle)
@@ -336,32 +365,15 @@ public struct RootView: View {
     }
 
     private var driftBanner: some View {
-        HStack(spacing: ScotchTheme.Spacing.small) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-                .symbolRenderingMode(.multicolor)
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(viewModel.overlayDrifts, id: \.component) { drift in
-                    Text("\(drift.component.displayName): \(drift.installedVersion ?? "-") \u{2192} \(drift.expectedVersion)")
-                        .font(.caption)
-                }
-                if let version = viewModel.runtimeUpdateVersion {
-                    Text("Runtime components do not match supported Wine \(version.description) matrix")
-                        .font(.caption)
-                }
-            }
+        HStack {
+            Image(systemName: "arrow.down.circle")
+            Text(viewModel.appUpdateAvailable ?? viewModel.availableRuntime?.title ?? (viewModel.needsGraphicsRepair ? "Graphics runtime update available" : "Update available"))
             Spacer()
-            Button("Update") {
-                viewModel.showSetupSheet = true
-            }
-            .buttonStyle(.glass)
-            .controlSize(.small)
-            .tint(ScotchTheme.accent)
+            Text("Use Update to install approved changes.").foregroundStyle(.secondary)
         }
-        .padding(ScotchTheme.Spacing.small)
-        .glassEffect(Glass.regular.tint(.yellow.opacity(0.18)), in: RoundedRectangle(cornerRadius: ScotchTheme.Radius.medium, style: .continuous))
-        .padding(.horizontal, ScotchTheme.Spacing.medium)
-        .padding(.top, ScotchTheme.Spacing.small)
+        .padding(12)
+        .scotchGlassCard(cornerRadius: 12)
+        .padding(.horizontal)
     }
 
     private var filteredBottles: [BottleSummary] {

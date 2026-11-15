@@ -17,10 +17,28 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.3</string>
+	<string>1.2.4</string>
 	<key>CFBundleVersion</key>
-	<string>8</string>
-	<key>CFBundleIconFile</key>
+	<string>16</string>
+	<key>SUFeedURL</key>
+    <string>https://s3brr.github.io/Scotch/updates/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>9yIFm7v7AZzHk/XRbF/ruSLj4BVXKGCG6RmaiO0Tz7k=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUSignedFeedFailureExpirationInterval</key>
+    <integer>0</integer>
+    <key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>

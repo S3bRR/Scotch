@@ -1,0 +1,14 @@
+Wine Steam window compatibility — LGPL-2.1-or-later
+
+Cross-process child window layer hosting: James, Wine bug 60263 attachment 82030,
+as attributed in typester/sake patch 0005. D3DMetal hosted swapchain adaptation:
+typester/sake patch 0006. Scotch ports these changes to WineForge 0.6.0.3 / Wine
+11.16 and scopes the matched DXMT loader policy to Steam's CEF executable.
+
+The upstream patches explicitly disclose AI assistance. Existing Wine/CodeWeavers
+copyright and license notices remain in the complete sources. See Wine-LGPL-2.1.txt
+for license terms and Scotch/scripts/graphics/wine-steam-surfaces.patch in the
+DMG's corresponding-source archive for the exact modifications and origins.
+
+https://github.com/typester/sake/tree/main/patches
+https://bugs.winehq.org/show_bug.cgi?id=60263

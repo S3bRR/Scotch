@@ -55,7 +55,7 @@ Not removed: **Rosetta 2**, which Scotch may install via `softwareupdate --insta
 | `$DARWIN_USER_CACHE_DIR/<id>` and `$DARWIN_USER_TEMP_DIR/<id>` | Metal shader caches for `com.s3brr.Scotch`, `.WineBundle`, `.Thumbnail`, and `org.winehq.wine` (Wine processes outside Wine.app) |
 | `~/Library/{Preferences,Caches,HTTPStorages,Saved Application State}/com.s3brr.Scotch.{WineBundle,Thumbnail}…` | Wine.app launcher and QuickLook extension state |
 | `/tmp/.wine-<uid>/server-<dev>-<inode>` | Wine server socket directory per bottle (the parent is removed when empty) |
-| `…/Steam/bin/cef/cef.win64/steamwebhelper_real.exe` | Inside bottles: Steam's real web helper, swapped for Scotch's launcher. Removed with the bottle |
+| `…/Steam/bin/cef/cef.win64/steamwebhelper_real.exe` | Legacy recovery backup inside a bottle. New versions restore this helper instead of patching Valve executables; removed with the bottle |
 | User-chosen `.app` shortcuts | Recorded in the ledger when created |
 | Bottles outside the default folder | Recorded in the ledger and catalog |
 

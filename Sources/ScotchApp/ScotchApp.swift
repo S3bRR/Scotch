@@ -4,22 +4,31 @@ import ScotchFeatures
 
 @main
 struct ScotchAppMain: App {
-    private let container = ScotchContainer(bundleIdentifier: "com.s3brr.Scotch")
+    private let container = ScotchContainer(bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.s3brr.Scotch")
+    @StateObject private var updater: ScotchAppUpdater
     @NSApplicationDelegateAdaptor(ScotchAppDelegate.self) private var appDelegate
     @Environment(\.openURL) private var openURL
 
     init() {
         ScotchAppDelegate.sharedContainer = container
+        let sharedContainer = container
+        _updater = StateObject(wrappedValue: ScotchAppUpdater(container: sharedContainer))
     }
 
     var body: some Scene {
         WindowGroup {
             RootView(container: container)
+                .onReceive(NotificationCenter.default.publisher(for: .scotchUpdate)) { _ in updater.update() }
+                .onReceive(NotificationCenter.default.publisher(for: .scotchUpdatePreferencesChanged)) { notification in
+                    if let enabled = notification.object as? Bool { updater.automaticallyChecks = enabled }
+                }
+                .sheet(isPresented: $updater.isPresented) { ScotchUpdatesView(updater: updater) }
                 .frame(minWidth: 980, minHeight: 600)
                 .background(PersistentWindowGlass().ignoresSafeArea(.all))
         }
         .commands {
             CommandGroup(after: .appInfo) {
+                Button("Update") { updater.update() }
                 Button("Open Setup") {
                     NotificationCenter.default.post(name: .scotchOpenSetup, object: nil)
                 }

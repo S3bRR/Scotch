@@ -24,9 +24,13 @@ public struct SettingsPanelView: View {
     public var body: some View {
         NavigationStack {
             Form {
+                Section("Updates") {
+                    Text("Use Update in the main window to update Scotch and its approved runtimes together. Your bottles and settings are preserved.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("General") {
                     Toggle("Kill bottle processes on app exit", isOn: $viewModel.settings.killProcessesOnTerminate)
-                    Toggle("Check for runtime updates", isOn: $viewModel.settings.checkRuntimeUpdates)
+                    Toggle("Automatically check for updates", isOn: $viewModel.settings.checkRuntimeUpdates)
 
                     HStack {
                         Text("Default bottle location")
@@ -46,7 +50,7 @@ public struct SettingsPanelView: View {
                         versionRow(label: "Wine", value: manifest.wineVersion)
                         versionRow(label: "DXVK", value: manifest.dxvkVersion)
                         versionRow(label: "DXMT", value: manifest.dxmtVersion)
-                        versionRow(label: "D3DMetal", value: manifest.d3dmetalVersion ?? "—")
+                        versionRow(label: "D3DMetal", value: manifest.d3dmetalVersion ?? "Not installed (optional)")
                         versionRow(label: "winemac patch", value: manifest.winemacPatchVersion ?? "—")
                         versionRow(label: "Zink", value: manifest.zinkVersion ?? "—")
                     } else {

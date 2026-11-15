@@ -81,11 +81,14 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     public func prepareBottle(name: String, windowsVersion: WindowsVersion, containerURL: URL) async throws -> BottleSummary {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         let bottleID = BottleID()
         let bottleDirectory = containerURL.appending(path: bottleID.rawValue)
         try fileSystem.createDirectory(at: bottleDirectory)
 
         var settings = BottleSettings()
+        settings.runtimeSetID = paths.defaultRuntimeSetID
         settings.info.name = name
         settings.wine.windowsVersion = windowsVersion
         settings.gpu.deviceIdSalt = UInt8.random(in: 0...255)
@@ -104,6 +107,8 @@ public actor BottleRepository: BottleRepositoryProtocol {
         _ summary: BottleSummary,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> BottleSummary {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         var working = summary
 
         _ = try await runtimeService.runWine(
@@ -182,6 +187,8 @@ public actor BottleRepository: BottleRepositoryProtocol {
         _ summary: BottleSummary,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> BottleSummary {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         var working = summary
         let metadata = working.directoryURL.appending(path: BottleSettings.metadataFileName)
 
@@ -213,6 +220,8 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     public func addExistingBottle(at directoryURL: URL) async throws -> BottleSummary {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         let metadata = directoryURL.appending(path: BottleSettings.metadataFileName)
         guard fileSystem.fileExists(at: metadata) else {
             throw RuntimeInstallerError.installFailed("Selected folder is not a valid bottle (missing Metadata.plist)")
@@ -229,6 +238,8 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     public func deleteBottle(id: BottleID, removeFiles: Bool) async throws {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         var catalog = await loadCatalog()
         guard let index = catalog.bottlePaths.firstIndex(where: { URL(fileURLWithPath: $0).lastPathComponent == id.rawValue }) else {
             return
@@ -264,6 +275,8 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     public func moveBottle(id: BottleID, destinationParent: URL) async throws -> BottleSummary {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         var catalog = await loadCatalog()
         guard let index = catalog.bottlePaths.firstIndex(where: { URL(fileURLWithPath: $0).lastPathComponent == id.rawValue }) else {
             throw RuntimeInstallerError.installFailed("Bottle not found")
@@ -304,6 +317,8 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     public func exportBottle(id: BottleID, destinationArchiveURL: URL) async throws {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         let catalog = await loadCatalog()
         guard let bottlePath = catalog.bottlePaths.first(where: { URL(fileURLWithPath: $0).lastPathComponent == id.rawValue }) else {
             throw RuntimeInstallerError.installFailed("Bottle not found")
@@ -335,18 +350,31 @@ public actor BottleRepository: BottleRepositoryProtocol {
     public func saveSettings(_ settings: BottleSettings, for id: BottleID) async throws {
         let bottles = await loadBottles()
         guard let bottle = bottles.first(where: { $0.id == id }) else { return }
+        let changesEngine = [.d3dmetal, .dxmt].contains(bottle.settings.backend.backend) != [.d3dmetal, .dxmt].contains(settings.backend.backend)
+        if changesEngine || bottle.settings.backend.backend != settings.backend.backend || bottle.settings.backend.glZinkEnabled != settings.backend.glZinkEnabled {
+            // Switching loaders requires an idle prefix and a complete recovery
+            // snapshot, just like changing the bottle's selected Wine version.
+            try await BottleRuntimeManager(paths: paths).switchBackend(for: bottle, settings: settings)
+            return
+        }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         let metadata = bottle.directoryURL.appending(path: BottleSettings.metadataFileName)
         try await plistStore.write(settings, to: metadata)
     }
 
     public func saveProgramSettings(_ settings: ProgramSettings, forProgramAt executablePath: String, bottleID: BottleID) async throws {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         let bottles = await loadBottles()
         guard let bottle = bottles.first(where: { $0.id == bottleID }) else { return }
         let settingsURL = programSettingsURL(for: URL(fileURLWithPath: executablePath), bottleDirectory: bottle.directoryURL)
         if !fileSystem.fileExists(at: settingsURL.deletingLastPathComponent()) {
             try fileSystem.createDirectory(at: settingsURL.deletingLastPathComponent())
         }
-        try await plistStore.write(settings, to: settingsURL)
+        var updated = settings
+        updated.lastGraphicsLaunch = try ProgramSettingsFiles.load(for: URL(fileURLWithPath: executablePath), in: bottle.directoryURL).lastGraphicsLaunch
+        try await plistStore.write(updated, to: settingsURL)
     }
 
     public func refreshPrograms(for id: BottleID) async -> [ProgramRecord] {
@@ -541,12 +569,7 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     static func programSettingsFileName(forExecutablePath executablePath: String) -> String {
-        let path = executablePath.lowercased()
-        let digest = SHA256.hash(data: Data(path.utf8))
-        let hash = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
-        let baseName = sanitizedFileName(URL(fileURLWithPath: executablePath).deletingPathExtension().lastPathComponent)
-
-        return "\(baseName)-\(hash)"
+        ProgramSettingsFiles.fileName(for: executablePath)
     }
 
     private func legacyProgramSettingsURL(for executableURL: URL, bottleDirectory: URL) -> URL {
@@ -653,6 +676,11 @@ public actor BottleRepository: BottleRepositoryProtocol {
             return recovered.catalog
         }
 
+        // Preserve an unreadable catalog, especially one referring to external drives.
+        if paths.catalogSearchURLs.contains(where: { fileSystem.fileExists(at: $0) }) {
+            recordMigrationEvent("Existing bottle catalog could not be read; original files were preserved. Restore from UpdateBackups or import bottles to recover.")
+            return BottleCatalog()
+        }
         let discovered = discoverCatalogFromDefaultDirectory()
         if !discovered.bottlePaths.isEmpty {
             recordMigrationEvent("Discovered \(discovered.bottlePaths.count) bottle(s) from default bottles directory")
@@ -662,6 +690,10 @@ public actor BottleRepository: BottleRepositoryProtocol {
     }
 
     private func appendBottlePathToCatalog(_ path: String) async throws {
+        if fileSystem.fileExists(at: paths.bottleCatalogURL),
+           (try? await plistStore.read(BottleCatalog.self, from: paths.bottleCatalogURL)) == nil {
+            throw RuntimeInstallerError.installFailed("Bottle catalog is unreadable. It has been preserved; restore a backup before adding bottles.")
+        }
         var catalog = await loadCatalog()
         let normalizedPath = URL(fileURLWithPath: path).path(percentEncoded: false)
         if !catalog.bottlePaths.contains(normalizedPath) {
