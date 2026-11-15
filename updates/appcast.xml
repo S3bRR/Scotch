@@ -1,6 +1,111 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0"><channel><title>Scotch Updates</title><link>https://github.com/S3bRR/Scotch</link><description>Approved Scotch app releases</description></channel></rss><!-- sparkle-signatures:
-edSignature: rWsJU103T8ZAZlPGgucW9/ULBWdwLc1U0UBae6UMgq27xd6rr02fpsXPO2TF+xMUbOAse9FI6VxmUKsPPM1oCQ==
-length: 531
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Scotch</title>
+        <item>
+            <title>1.2.4</title>
+            <pubDate>Sat, 14 Nov 2026 19:07:26 -0800</pubDate>
+            <sparkle:version>16</sparkle:version>
+            <sparkle:shortVersionString>1.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[## Scotch 1.2.4 (build 16)
+
+Repairs graphics runtime downloads, Steam's black window and Windows 11 core-font
+installation. Adds Auto backend selection and a single Update flow for Scotch
+and its approved graphics runtimes.
+
+### Fixes
+
+- **Runtime setup:** replaces the missing D3DMetal overlay URL with the verified
+  GPTK 3.0-3 payload and its compatible Wine engine. Successful repair clears the
+  repeating update notice. Failed required downloads or verification preserve
+  the previous runtime.
+- **Steam:** repairs WineMac child-surface hosting and uses the matched DXMT
+  bridge for Steam's CEF helper while games retain their selected backend. GPU
+  compositing remains enabled and Valve's executables stay intact. Fresh prefixes
+  register the winemetal bridge before the first launch. Legacy Scotch helper
+  shims are restored from retained originals.
+- **Install Steam:** waits for the official installer to finish, verifies and
+  pins Steam, then starts its first client update through the configured engine.
+- **Windows 11 core fonts:** preserves the bundled cabextract path when assembling
+  Wine's environment. Homebrew is unnecessary. For an existing bottle affected
+  by the warning, retry **Winetricks → corefonts**; do not recreate the bottle.
+
+### Improvements
+
+- **Auto in the main Backend picker**, enabled by default for new bottles.
+  Detects executable architecture and graphics imports, explains its choice and
+  selects supported, unambiguous DirectX 12/OpenGL backends before launch.
+  Ambiguous applications and launchers keep their existing renderer.
+- Per-application manual overrides and explicitly confirmed working setups.
+  Process startup alone never confirms rendering or measured performance.
+  Existing manual bottle choices remain saved; select Auto to enable it there.
+- **One Update command** checks Scotch and approved runtime updates, reports
+  what changes and preserves bottles, games, saves, settings and custom locations.
+  App archives and feeds are authenticated. Existing bottles retain their runtime
+  selection; engine/backend changes require idle Wine processes and a full
+  recovery snapshot. Large bottles need space for that copy.
+- New shortcuts and terminal launches read the current application profile.
+  Bottle Runtime is now the CPU button in the bottom toolbar.
+- A weekly workflow discovers and verifies upstream candidates for review;
+  untested upstream releases are not automatically promoted to users.
+
+Runtime pins: Wine 11.16 with WineForge 0.6.0.3, DXVK 1.10.3-repack, DXMT 0.80,
+GPTK/D3DMetal 3.0-3, Mesa Zink 26.2.0 and MoltenVK 1.4.2. Native support profile
+2 supplies the Vulkan routing and Steam compatibility fixes. Steam still uses
+a CEF-only Windows sandbox compatibility option; macOS security and TLS
+settings are unchanged.
+
+### Requirements and installation
+
+- Apple Silicon, macOS 26 Tahoe or later, and Rosetta 2 for Wine.
+- Download **Scotch.dmg**, open it, and drag Scotch into Applications. The DMG
+  contains only Scotch and the Applications shortcut.
+- Quit Steam and Scotch before replacing the app. Keep Application Support and
+  custom bottle folders. **Do not use Uninstall to update.** Versions without
+  the updater need this one manual app replacement. Use Update if a graphics
+  repair is offered afterwards.
+- **Ad-hoc signed, not Developer ID signed or notarized.** Ad-hoc signing provides
+  local code-signature integrity, not Apple-verified publisher identity. macOS
+  may block the first launch; after attempting to open Scotch, use **System
+  Settings → Privacy & Security → Open Anyway** if offered, then confirm. Only
+  do this for a download you trust. Do not disable Gatekeeper globally.
+
+### Validation
+
+- Tested on **macOS 27.2.1 / Apple M5 Pro**: complete Windows 11 bottle creation,
+  all ten core font families, fresh Steam installation/first bootstrap and Steam
+  launches with DXVK, DXMT, D3DMetal and Zink. The development user confirmed the
+  visible Steam window renders and the local test build works.
+- Actual GPU rendering/readback for DXVK and DXMT in x86/x64, D3DMetal in x64,
+  and OpenGL 4.5+ Zink in x86/x64. Combined Direct3D and additive Zink, automatic
+  OpenGL/DirectX 12 selection, repair and prefix recovery also passed.
+- Regression checks cover relocated helper lookup, manual/remembered priorities,
+  malformed executables, missing runtimes, idle gates, update authentication,
+  rollback, external catalogs, future metadata and save preservation.
+- Real signed app replacement/relaunch preserves the test save/catalog and
+  clears the update offer. Release bundle checks cover resources, executable
+  cabextract, QuickLook, architecture, signatures and CLI startup.
+- **Not verified:** every game, other Mac/GPU combinations, manual macOS 26
+  testing for this release or Gatekeeper behavior on a clean Mac. Notarization
+  remains unavailable without Developer ID credentials.
+
+### Corresponding native source
+
+`ScotchGraphicsSources.tar.xz` and its checksum are separate assets on this
+release. They include the pinned WineForge/Mesa originals, Scotch source,
+patches, licenses, attributions and build instructions. They are optional for
+running Scotch. GitHub's automatic source ZIP/tarball contains the Scotch
+repository; use the additional archive for the upstream native originals.
+
+See **Scotch.dmg.sha256** to verify the installer download.
+]]></description>
+            <enclosure url="https://github.com/S3bRR/Scotch/releases/download/v1.2.4/Scotch.dmg" length="10910790" type="application/octet-stream" sparkle:edSignature="DpJfjgLiz46dSEOus1XBSjqS3xT8+KsIPj1dY3GeSQzTZPT6Ub/cjsh1zrDoVwCLcEF1zMJ98I5xY8kUAKrpDQ=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: gIXuAghdjYB7JddGRjnIijffwlYriVSWih6jdcMohx8dKAS4xnRsj3S9YvuHuPnsUM/ecDyVPvNtigbI2BlYDQ==
+length: 6578
 -->
