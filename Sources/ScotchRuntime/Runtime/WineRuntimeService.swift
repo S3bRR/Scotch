@@ -17,6 +17,19 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     private let logStore: LogStore
     private let envAssembler: EnvironmentAssembler
 
+    private var selectedRuntimeWorkers: [String: WineRuntimeService] = [:]
+
+    private func runtimeWorker(for bottle: BottleSummary?) -> WineRuntimeService? {
+        guard let bottle else { return nil }
+        let selected = paths.forBottle(bottle)
+        guard selected.librariesDirectory != paths.librariesDirectory || selected.usesMetalEngine != paths.usesMetalEngine else { return nil }
+        let key = selected.wineBinaryURL.path
+        if let existing = selectedRuntimeWorkers[key] { return existing }
+        let worker = WineRuntimeService(paths: selected, processRunner: processRunner, fileSystem: fileSystem, logger: logger, logStore: logStore, envAssembler: EnvironmentAssembler(paths: selected))
+        selectedRuntimeWorkers[key] = worker
+        return worker
+    }
+
     private var latestLogByBottleID: [BottleID: URL] = [:]
 
     public init(
@@ -41,15 +54,37 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         bottle: BottleSummary,
         extraEnvironment: [String: String]
     ) async throws {
+        let graphics = ProgramGraphicsManager(paths: paths)
+        let prepared = try await graphics.prepareLaunch(url, bottle: bottle, arguments: arguments, environment: extraEnvironment)
+        defer { withExtendedLifetime(prepared.lease) {} }
+        let selected = prepared.bottle
+        if let worker = runtimeWorker(for: selected) {
+            try await worker.runResolvedProgram(at: url, arguments: arguments, bottle: selected, extraEnvironment: extraEnvironment)
+        } else {
+            try await runResolvedProgram(at: url, arguments: arguments, bottle: selected, extraEnvironment: extraEnvironment)
+        }
+        do { try await graphics.recordLaunch(url, bottle: selected, choice: prepared.choice, arguments: arguments, environment: extraEnvironment) }
+        catch { logger.warning("Application launched, but its graphics setup could not be recorded: \(error.localizedDescription)") }
+    }
+
+    private func runResolvedProgram(at url: URL, arguments: [String], bottle: BottleSummary, extraEnvironment: [String: String]) async throws {
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         try await prepareBottleForLaunch(bottle)
-        if url.lastPathComponent.caseInsensitiveCompare("steam.exe") == .orderedSame {
-            await prepareSteamWebHelper(steamExecutable: url, bottle: bottle)
+        let isSteam = url.lastPathComponent.caseInsensitiveCompare("steam.exe") == .orderedSame
+        if isSteam {
+            try await prepareSteamWebHelper(steamExecutable: url, bottle: bottle)
         }
 
+        let directExecutable = url.pathExtension.caseInsensitiveCompare("exe") == .orderedSame
+        var launchEnvironment = extraEnvironment
+        if directExecutable, launchEnvironment["SCOTCH_LAUNCH_CWD"] == nil {
+            launchEnvironment["SCOTCH_LAUNCH_CWD"] = url.deletingLastPathComponent().path
+        }
         try await runWineBundle(
-            arguments: ["start", "/unix", url.path(percentEncoded: false)] + arguments,
+            arguments: (directExecutable ? [url.path(percentEncoded: false)] : ["start", "/unix", url.path(percentEncoded: false)]) + SteamLaunchPolicy.applying(to: arguments, executable: url, usingMetalEngine: paths.usesMetalEngine),
             bottle: bottle,
-            extraEnvironment: extraEnvironment,
+            extraEnvironment: launchEnvironment,
             displayName: url.lastPathComponent
         )
     }
@@ -58,7 +93,8 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         guard let steamExecutable = steamExecutableURL(in: bottle) else {
             throw RuntimeInstallerError.installFailed("Steam executable not found in bottle")
         }
-        try await runProgram(at: steamExecutable, arguments: arguments, bottle: bottle, extraEnvironment: [:])
+        let settings = try ProgramSettingsFiles.load(for: steamExecutable, in: bottle.directoryURL)
+        try await runProgram(at: steamExecutable, arguments: settings.parsedArguments() + arguments, bottle: bottle, extraEnvironment: settings.effectiveEnvironment())
     }
 
     public func runBatchFile(
@@ -66,6 +102,9 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         bottle: BottleSummary,
         extraEnvironment: [String: String]
     ) async throws {
+        if let worker = runtimeWorker(for: bottle) { return try await worker.runBatchFile(at: url, bottle: bottle, extraEnvironment: extraEnvironment) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         try await prepareBottleForLaunch(bottle)
         try await runWineBundle(
             arguments: ["cmd", "/c", url.path(percentEncoded: false)],
@@ -76,6 +115,9 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func runGUITool(arguments: [String], bottle: BottleSummary) async throws {
+        if let worker = runtimeWorker(for: bottle) { return try await worker.runGUITool(arguments: arguments, bottle: bottle) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         try await prepareBottleForLaunch(bottle)
         try await runWineBundle(
             arguments: arguments,
@@ -86,7 +128,11 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func prepareBottleForLaunch(_ bottle: BottleSummary) async throws {
+        if let worker = runtimeWorker(for: bottle) { return try await worker.prepareBottleForLaunch(bottle) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         try ensureRuntimeReady()
+        try BottleEngineMigration.prepare(bottle, paths: paths)
         try await WineBundleSigning(processRunner: processRunner).ensureSigned(at: paths.wineBundleURL)
         try applyBackendDLLs(for: bottle)
         try writeDXVKConfigIfNeeded(for: bottle)
@@ -94,6 +140,17 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String]) async throws -> String {
+        try await runWine(arguments: arguments, bottle: bottle, environment: environment, timeout: nil)
+    }
+
+    public func runWine(arguments: [String], bottle: BottleSummary?, environment: [String: String], timeout: TimeInterval?) async throws -> String {
+        if let worker = runtimeWorker(for: bottle) { return try await worker.runWine(arguments: arguments, bottle: bottle, environment: environment, timeout: timeout) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
+        if let bottle {
+            try ensureRuntimeReady()
+            try BottleEngineMigration.prepare(bottle, paths: paths)
+        }
         let logDestination = try await logStore.createLogFile(bottleID: bottle?.id)
         defer { try? logDestination.fileHandle.close() }
         logDestination.fileHandle.writeLogHeader(appName: "Scotch", bundleIdentifier: paths.bundleIdentifier)
@@ -113,14 +170,18 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
             executableURL: paths.wineBinaryURL,
             arguments: arguments,
             environment: processEnvironment,
-            displayName: "wine"
+            displayName: "wine",
+            timeout: timeout
         )
 
         return try await processRunner.captureProcess(specification, outputFileHandle: logDestination.fileHandle)
     }
 
     public func runWineServer(arguments: [String], bottle: BottleSummary) async throws -> String {
-        try await runWineServerInternal(arguments: arguments, bottle: bottle, timeout: nil)
+        if let worker = runtimeWorker(for: bottle) { return try await worker.runWineServer(arguments: arguments, bottle: bottle) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
+        return try await runWineServerInternal(arguments: arguments, bottle: bottle, timeout: nil)
     }
 
     private func runWineServerInternal(arguments: [String], bottle: BottleSummary, timeout: TimeInterval?) async throws -> String {
@@ -140,6 +201,7 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func syncCompatibilityState(for bottle: BottleSummary) async {
+        if let worker = runtimeWorker(for: bottle) { return await worker.syncCompatibilityState(for: bottle) }
         do {
             try writeDXVKConfigIfNeeded(for: bottle)
         } catch {
@@ -149,18 +211,22 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func killBottle(_ bottle: BottleSummary, timeout: TimeInterval? = nil) async {
+        if let worker = runtimeWorker(for: bottle) { return await worker.killBottle(bottle, timeout: timeout) }
         do {
             _ = try await runWineServerInternal(
                 arguments: ["-k"],
                 bottle: bottle,
                 timeout: timeout ?? Self.defaultKillTimeout
             )
+            _ = try await runWineServerInternal(arguments: ["-w"], bottle: bottle, timeout: timeout ?? Self.defaultKillTimeout)
         } catch {
             logger.warning("Failed to kill bottle \(bottle.settings.info.name): \(error.localizedDescription)")
         }
+        await WineProcessInspector.stopRemainingProcesses(in: bottle.directoryURL)
     }
 
     public func latestLogURL(for bottle: BottleSummary) async -> URL? {
+        if let worker = runtimeWorker(for: bottle) { return await worker.latestLogURL(for: bottle) }
         if let cached = latestLogByBottleID[bottle.id] {
             return cached
         }
@@ -176,7 +242,8 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func makeShellEnvironment(for bottle: BottleSummary) async -> [String: String] {
-        envAssembler.makeShellEnvironment(bottle: bottle)
+        if let worker = runtimeWorker(for: bottle) { return await worker.makeShellEnvironment(for: bottle) }
+        return envAssembler.makeShellEnvironment(bottle: bottle)
     }
 
     public func generateRunCommand(
@@ -185,7 +252,12 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         bottle: BottleSummary,
         extraEnvironment: [String: String]
     ) async -> String {
-        let environment = envAssembler.makeWineEnvironment(bottle: bottle, extra: extraEnvironment)
+        if let worker = runtimeWorker(for: bottle) { return await worker.generateRunCommand(at: url, arguments: arguments, bottle: bottle, extraEnvironment: extraEnvironment) }
+        var launchExtra = extraEnvironment
+        if url.pathExtension.caseInsensitiveCompare("exe") == .orderedSame, launchExtra["SCOTCH_LAUNCH_CWD"] == nil {
+            launchExtra["SCOTCH_LAUNCH_CWD"] = url.deletingLastPathComponent().path
+        }
+        let environment = envAssembler.makeWineEnvironment(bottle: bottle, extra: launchExtra)
         let envFile = writeLaunchEnvironmentFile(environment, bottle: bottle)
         var launchEnvironment = environment
         launchEnvironment["SCOTCH_LAUNCH_ENV"] = envFile.path(percentEncoded: false)
@@ -196,10 +268,13 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
             guard let value = launchEnvironment[key], key.isShellEnvironmentKey else { continue }
             command += " --env \(key)=\(value.shellQuoted)"
         }
-        command += " --args start /unix \(url.shellEscapedPath)"
+        command += url.pathExtension.caseInsensitiveCompare("exe") == .orderedSame
+            ? " --args \(url.shellEscapedPath)"
+            : " --args start /unix \(url.shellEscapedPath)"
 
-        if !arguments.isEmpty {
-            let escapedArguments = arguments.map { $0.shellEscaped }.joined(separator: " ")
+        let launchArguments = SteamLaunchPolicy.applying(to: arguments, executable: url, usingMetalEngine: paths.usesMetalEngine)
+        if !launchArguments.isEmpty {
+            let escapedArguments = launchArguments.map { $0.shellEscaped }.joined(separator: " ")
             command += " \(escapedArguments)"
         }
 
@@ -238,11 +313,13 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
 
     private static let launchEnvironmentPassthroughKeys = [
         "WINEPREFIX", "WINE", "WINELOADER", "WINESERVER", "PATH",
-        "WINEDLLOVERRIDES", "WINEESYNC", "WINEMSYNC", "WINEDEBUG", "GST_DEBUG",
+        "WINEDLLPATH", "WINEDLLOVERRIDES", "WINE_D3D_CONFIG", "WINEESYNC", "WINEMSYNC", "WINEDEBUG", "GST_DEBUG",
         "DXVK_HUD", "DXVK_ASYNC", "DXVK_CONFIG_FILE", "DXVK_VENDOR_ID", "DXVK_DEVICE_ID",
         "GALLIUM_DRIVER", "MESA_LOADER_DRIVER_OVERRIDE", "LIBGL_ALWAYS_SOFTWARE",
         "SCOTCH_GPU_SPOOF_LIB", "SCOTCH_GPU_VENDOR_ID", "SCOTCH_GPU_DEVICE_ID",
         "SCOTCH_GPU_DEVICE_NAME", "SCOTCH_GPU_VRAM_MB", "SCOTCH_REAL_MOLTENVK_PATH",
+        "GRAPHICS_BACKEND", "D3DMETAL_RUNTIME_DIR", "D3DMETAL_UNIXLIB_DIR", "DXMT_RUNTIME_DIR",
+        "VK_DRIVER_FILES", "VK_ICD_FILENAMES", "MESA_KK_EXPERIMENTAL",
         "CX_LIBVULKAN", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH",
         "MVK_CONFIG_RESUME_LOST_DEVICE", "MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE",
         "ROSETTA_ADVERTISE_AVX", "MTL_HUD_ENABLED", "METAL_CAPTURE_ENABLED",
@@ -301,42 +378,40 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     public func listProcesses(in bottle: BottleSummary) async throws -> [BottleProcessInfo] {
-        let output = try await runWine(arguments: ["tasklist.exe", "/FO", "CSV", "/NH"], bottle: bottle, environment: [:])
+        if let worker = runtimeWorker(for: bottle) { return try await worker.listProcesses(in: bottle) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
+        let output = try await runWineInternal(arguments: ["tasklist.exe", "/FO", "CSV", "/NH"], bottle: bottle, environment: [:], timeout: 10)
         return parseTaskListOutput(output)
     }
 
     public func killProcess(pid: Int, in bottle: BottleSummary) async throws {
+        if let worker = runtimeWorker(for: bottle) { return try await worker.killProcess(pid: pid, in: bottle) }
+        let activityLease = try UpdateActivity.shared.beginOperation()
+        defer { withExtendedLifetime(activityLease) {} }
         _ = try await runWine(arguments: ["taskkill.exe", "/PID", "\(pid)", "/F"], bottle: bottle, environment: [:])
     }
 
-    /// Installs the single-process web helper launcher (see `SteamWebHelperLauncher`).
-    /// If that changed files under a Steam that is already running without it, asks
-    /// Steam to quit first so the launch below starts a fresh, visible instance.
-    private func prepareSteamWebHelper(steamExecutable: URL, bottle: BottleSummary) async {
+    /// Recover only our obsolete CEF shim. New launches leave Valve's files intact.
+    private func prepareSteamWebHelper(steamExecutable: URL, bottle: BottleSummary) async throws {
         guard let launcher = SteamWebHelperLauncher.bundled() else {
-            logger.warning("Steam web helper launcher is not bundled; Steam may show a black window")
+            logger.warning("Legacy Steam helper migration resource is unavailable")
             return
         }
-        let outcome: SteamWebHelperLauncher.Outcome
-        do {
-            outcome = try launcher.ensureInstalled(steamDirectory: steamExecutable.deletingLastPathComponent())
-        } catch {
-            logger.warning("Failed to install Steam web helper launcher: \(error.localizedDescription)")
-            return
+        let directory = steamExecutable.deletingLastPathComponent()
+        guard try launcher.needsRestoration(steamDirectory: directory) else { return }
+        if await isSteamRunning(in: bottle) {
+            logger.info("Restarting Steam to restore its original web helper")
+            _ = try await runWineInternal(arguments: [steamExecutable.path, "-shutdown"], bottle: bottle, environment: [:], timeout: 10)
+            for _ in 0..<30 {
+                if !(await isSteamRunning(in: bottle)) { break }
+                try await Task.sleep(for: .seconds(1))
+            }
+            guard !(await isSteamRunning(in: bottle)) else {
+                throw RuntimeInstallerError.installFailed("Close Steam before Scotch restores its original web helper.")
+            }
         }
-        guard outcome == .installed, await isSteamRunning(in: bottle) else { return }
-
-        logger.info("Restarting Steam in \(bottle.settings.info.name) to apply the web helper launcher")
-        _ = try? await runWineInternal(
-            arguments: [steamExecutable.path(percentEncoded: false), "-shutdown"],
-            bottle: bottle,
-            environment: [:]
-        )
-        var waited = 0
-        while waited < 30, await isSteamRunning(in: bottle) {
-            try? await Task.sleep(for: .seconds(1))
-            waited += 1
-        }
+        try launcher.restoreOriginalIfNeeded(steamDirectory: directory)
     }
 
     private func isSteamRunning(in bottle: BottleSummary) async -> Bool {
@@ -345,6 +420,11 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     private func ensureRuntimeReady() throws {
+        if paths.usesMetalEngine {
+            try MetalEngineInstallation.verify(in: paths.librariesDirectory)
+            try MetalEngineInstallation.verifyDXMT(in: paths.librariesDirectory)
+            try GraphicsSupportInstallation.verify(in: paths.librariesDirectory)
+        }
         if !fileSystem.fileExists(at: paths.wineBinaryURL) {
             throw RuntimeInstallerError.installFailed("Wine binary missing at \(paths.wineBinaryURL.path(percentEncoded: false))")
         }
@@ -436,19 +516,31 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
         try fileSystem.restoreOriginalDLLs(in: system32)
         try fileSystem.restoreOriginalDLLs(in: syswow64)
 
+        // A new prefix has no winemetal builtin stub. WINEDLLPATH alone does
+        // not make its name discoverable to the Windows loader. Register only
+        // this additional module; the loader resolves its matched Unix bridge.
+        // Exposing all of DXMT here would change DXVK's DXGI fallback.
+        for (directory, architecture) in [(system32, "x86_64-windows"), (syswow64, "i386-windows")] {
+            let source = paths.librariesDirectory.appending(path: "DXMT/\(architecture)/winemetal.dll")
+            let target = directory.appending(path: "winemetal.dll")
+            try fileSystem.createDirectory(at: directory)
+            if (try? SHA256Checksum.hashFile(at: target)) != (try SHA256Checksum.hashFile(at: source)) {
+                try Data(contentsOf: source).write(to: target, options: .atomic)
+            }
+        }
+
         switch bottle.settings.backend.backend {
         case .dxvk:
             try fileSystem.replaceDLLs(in: system32, from: paths.librariesDirectory.appending(path: "DXVK/x64"))
             try fileSystem.replaceDLLs(in: syswow64, from: paths.librariesDirectory.appending(path: "DXVK/x32"))
         case .dxmt:
-            try fileSystem.replaceDLLs(in: system32, from: paths.librariesDirectory.appending(path: "DXMT/x64"))
-            try fileSystem.replaceDLLs(in: syswow64, from: paths.librariesDirectory.appending(path: "DXMT/x32"))
+            try MetalEngineInstallation.verifyDXMT(in: paths.librariesDirectory)
+            // Builtin PE/Unix modules are resolved together by the matched loader.
+            // Native overrides would select stock WineD3D or fail the Unix ABI.
         case .d3dmetal:
-            try fileSystem.replaceDLLs(in: system32, from: paths.librariesDirectory.appending(path: "D3DMetal/x64"))
-            let x32 = paths.librariesDirectory.appending(path: "D3DMetal/x32")
-            if fileSystem.fileExists(at: x32) {
-                try fileSystem.replaceDLLs(in: syswow64, from: x32, requireAtLeastOneDLL: false)
-            }
+            try D3DMetalInstallation.verify(at: paths.librariesDirectory.appending(path: "D3DMetal"))
+            // The matched loader resolves Apple's builtin modules from the
+            // explicit runtime tree, without a silent WineD3D fallback.
         case .zink:
             try installZinkDLLs(system32: system32, syswow64: syswow64)
         case .none:
@@ -461,6 +553,7 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     }
 
     private func installZinkDLLs(system32: URL, syswow64: URL) throws {
+        try GraphicsSupportInstallation.verify(in: paths.librariesDirectory)
         try fileSystem.replaceDLLs(in: system32, from: paths.librariesDirectory.appending(path: "Zink/x64"))
         let zinkX32 = paths.librariesDirectory.appending(path: "Zink/x32")
         if fileSystem.fileExists(at: zinkX32) {
@@ -638,13 +731,15 @@ public actor WineRuntimeService: WineRuntimeServiceProtocol {
     private func runWineInternal(
         arguments: [String],
         bottle: BottleSummary,
-        environment: [String: String]
+        environment: [String: String],
+        timeout: TimeInterval? = nil
     ) async throws -> String {
         let specification = ProcessSpecification(
             executableURL: paths.wineBinaryURL,
             arguments: arguments,
             environment: envAssembler.makeWineEnvironment(bottle: bottle, extra: environment),
-            displayName: "wine"
+            displayName: "wine",
+            timeout: timeout
         )
         return try await processRunner.captureProcess(specification, outputFileHandle: nil)
     }

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ScotchFeatures
+import ScotchInfrastructure
 
 @MainActor
 final class ScotchAppDelegate: NSObject, NSApplicationDelegate {
@@ -60,7 +61,7 @@ final class ScotchAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !didUninstall, let container = Self.sharedContainer else { return .terminateNow }
+        guard !didUninstall, !UpdateActivity.shared.isApplyingUpdate, let container = Self.sharedContainer else { return .terminateNow }
 
         let deadline = Date().addingTimeInterval(3.5)
         Task { @MainActor in

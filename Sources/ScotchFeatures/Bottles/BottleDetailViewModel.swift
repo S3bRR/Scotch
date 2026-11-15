@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import ScotchDomain
 import ScotchInfrastructure
+import ScotchRuntime
 
 @MainActor
 public final class BottleDetailViewModel: ObservableObject {
@@ -59,7 +60,10 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     public func installSteam() async {
+        guard let lease = try? UpdateActivity.shared.beginOperation() else { statusMessage = "An update is being installed."; return }
+        defer { withExtendedLifetime(lease) {} }
         guard !isInstallingSteam else { return }
+        refreshSteamInstalled()
         guard !steamInstalled else { return }
 
         isInstallingSteam = true
@@ -98,25 +102,17 @@ public final class BottleDetailViewModel: ObservableObject {
             try FileManager.default.moveItem(at: tempFile, to: setupURL)
             steamInstallProgress = 0.25
 
-            statusMessage = "Running Steam installer… follow the prompts in the Wine window."
-            try await container.runtimeService.runProgram(
-                at: setupURL,
-                arguments: [],
-                bottle: bottle,
-                extraEnvironment: [:]
+            statusMessage = "Installing Steam…"
+            try await container.runtimeService.prepareBottleForLaunch(bottle)
+            // Wait for NSIS to finish. Its normal Finish page launches Steam
+            // before Scotch can apply the CEF policy; silent mode leaves that
+            // first launch under Scotch's control.
+            _ = try await container.runtimeService.runWine(
+                arguments: [setupURL.path(percentEncoded: false), "/S"],
+                bottle: bottle, environment: [:], timeout: 180
             )
-            steamInstallProgress = 0.5
-
-            let deadline = Date().addingTimeInterval(15 * 60)
-            while Date() < deadline {
-                if let steamURL = Self.steamExecutableURL(for: bottle) {
-                    steamInstallProgress = 1.0
-                    steamInstalled = true
-                    _ = steamURL
-                    break
-                }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-            }
+            steamInstallProgress = 0.65
+            refreshSteamInstalled()
 
             if steamInstalled, let steamURL = Self.steamExecutableURL(for: bottle) {
                 try? FileManager.default.removeItem(at: setupURL)
@@ -129,13 +125,20 @@ public final class BottleDetailViewModel: ObservableObject {
                         PinnedProgram(name: "Steam", executablePath: path, removable: true)
                     )
                     await saveSettings(settings)
+                    guard bottle.settings.info.pins.contains(where: { $0.executablePath.caseInsensitiveCompare(path) == .orderedSame }) else {
+                        throw RuntimeInstallerError.installFailed("Steam was installed, but its pin could not be saved.")
+                    }
                 }
                 await refresh()
-                statusMessage = "Steam installed and pinned."
+                statusMessage = "Starting Steam and downloading its client updates…"
+                steamInstallProgress = 0.85
+                try await container.runtimeService.runSteam(in: bottle, arguments: [])
+                steamInstallProgress = 1.0
+                statusMessage = "Steam installed and pinned. Its first launch may download client updates before the sign-in window opens."
             } else if steamInstalled {
-                statusMessage = "Steam installed successfully."
+                statusMessage = "Steam installed. Launch it to finish downloading client updates."
             } else {
-                statusMessage = "Steam installer did not finish. You can retry from the Install Steam button."
+                statusMessage = "Steam setup finished without installing steam.exe. Try Install Steam again; your bottle has been preserved."
             }
         } catch {
             statusMessage = "Steam install failed: \(error.localizedDescription)"
@@ -148,6 +151,11 @@ public final class BottleDetailViewModel: ObservableObject {
         stagedBottle.settings = settings
 
         do {
+
+            try await container.bottleRepository.saveSettings(settings, for: bottle.id)
+            bottle.settings = settings
+            lastSavedSettings = settings
+
             if previousSettings.wine.windowsVersion != settings.wine.windowsVersion {
                 _ = try await container.runtimeService.runWine(
                     arguments: ["winecfg", "-v", settings.wine.windowsVersion.rawValue],
@@ -156,15 +164,13 @@ public final class BottleDetailViewModel: ObservableObject {
                 )
             }
 
-            try await container.bottleRepository.saveSettings(settings, for: bottle.id)
-            bottle.settings = settings
-            lastSavedSettings = settings
 
             if compatibilityInputsChanged(from: previousSettings, to: settings) {
                 await container.runtimeService.syncCompatibilityState(for: stagedBottle)
             }
         } catch {
-            statusMessage = "Failed to save settings: \(error.localizedDescription)"
+            bottle.settings = lastSavedSettings
+            statusMessage = "Failed to apply settings: \(error.localizedDescription)"
         }
     }
 
@@ -215,6 +221,8 @@ public final class BottleDetailViewModel: ObservableObject {
 
     public func runProgram(_ program: ProgramRecord, arguments: [String] = [], environment: [String: String] = [:]) async {
         let path = program.executableURL.path(percentEncoded: false)
+        guard !(isInstallingSteam && program.executableURL.lastPathComponent.caseInsensitiveCompare("steam.exe") == .orderedSame) else { return }
+        guard !launchingProgramPaths.contains(path) else { return }
         launchingProgramPaths.insert(path)
         defer { launchingProgramPaths.remove(path) }
         isLaunching = true
@@ -228,6 +236,7 @@ public final class BottleDetailViewModel: ObservableObject {
                 bottle: bottle,
                 extraEnvironment: mergedEnvironment
             )
+            await reloadGraphicsSelection()
             isLaunching = false
             statusMessage = "Launched \(program.displayName)."
             // `open` returns as soon as Wine starts; keep the tile's spinner until
@@ -255,19 +264,14 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     public func runProgramInTerminal(_ program: ProgramRecord) async {
+        let command: String
         do {
-            try await container.runtimeService.prepareBottleForLaunch(bottle)
+            command = try ProgramLaunchCommand.configured(executable: program.executableURL, bottle: bottle)
         } catch {
             statusMessage = "Failed to prepare bottle: \(error.localizedDescription)"
             return
         }
 
-        let command = await container.runtimeService.generateRunCommand(
-            at: program.executableURL,
-            arguments: program.settings.parsedArguments(),
-            bottle: bottle,
-            extraEnvironment: program.settings.effectiveEnvironment()
-        )
         let escaped = command
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -366,12 +370,7 @@ public final class BottleDetailViewModel: ObservableObject {
 
     public func createShortcut(for program: ProgramRecord, destination: URL) async {
         do {
-            let launchCommand = await container.runtimeService.generateRunCommand(
-                at: program.executableURL,
-                arguments: program.settings.parsedArguments(),
-                bottle: bottle,
-                extraEnvironment: program.settings.effectiveEnvironment()
-            )
+            let launchCommand = try ProgramLaunchCommand.configured(executable: program.executableURL, bottle: bottle)
             try await container.shortcutService.createShortcut(
                 for: program,
                 in: bottle,
@@ -390,15 +389,36 @@ public final class BottleDetailViewModel: ObservableObject {
         }
     }
 
-    public func saveProgramSettings(_ settings: ProgramSettings, for program: ProgramRecord) async {
+    @discardableResult public func saveProgramSettings(_ settings: ProgramSettings, for program: ProgramRecord) async -> Bool {
         let executablePath = program.executableURL.path(percentEncoded: false)
         do {
             try await container.bottleRepository.saveProgramSettings(settings, forProgramAt: executablePath, bottleID: bottle.id)
             await refresh()
             statusMessage = "Saved settings for \(program.displayName)."
+            return true
         } catch {
             statusMessage = "Failed to save program settings: \(error.localizedDescription)"
+            return false
         }
+    }
+
+    public func graphicsRecommendation(for program: ProgramRecord, settings: ProgramSettings) async -> ProgramGraphicsRecommendation {
+        await ProgramGraphicsManager(paths: container.paths).recommendation(for: program.executableURL, bottle: bottle, settings: settings)
+    }
+
+    public func rememberWorkingGraphics(for program: ProgramRecord, settings: ProgramSettings) async throws -> ProgramSettings {
+        let changed = try await ProgramGraphicsManager(paths: container.paths).confirmWorking(program.executableURL, bottle: bottle, settings: settings)
+        await refresh()
+        return changed
+    }
+
+    private func reloadGraphicsSelection() async {
+        if let settings = try? await container.plistStore.read(BottleSettings.self, from: bottle.directoryURL.appending(path: BottleSettings.metadataFileName)) {
+            var changed = bottle; changed.settings = settings
+            adoptBottle(changed)
+            NotificationCenter.default.post(name: .scotchBottleRuntimeChanged, object: nil)
+        }
+        await refresh()
     }
 
     public func addProgramToBlocklist(_ program: ProgramRecord) async {
@@ -613,7 +633,9 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     private func compatibilityInputsChanged(from old: BottleSettings, to new: BottleSettings) -> Bool {
-        old.backend != new.backend || old.gpu != new.gpu
+        var previousBackend = old.backend
+        previousBackend.automatic = new.backend.automatic
+        return previousBackend != new.backend || old.gpu != new.gpu
     }
 
     private func makeShellEnvironmentCommand(from environment: [String: String]) -> String {

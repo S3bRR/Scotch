@@ -1,0 +1,26 @@
+{
+  "version": "scotch-graphics-2",
+  "archiveSHA256": "a458c9e3fb90eb0c7af67304657d69ab2c2e21e6ed0305378cc6f3a2b820c75f",
+  "files": {
+    "Graphics/Licenses/Mesa.txt": "0d1a0472ecc81830e75c20d59b0ea02841e3db21255e0ebad97ab682c54d6615",
+    "Graphics/Licenses/MoltenVK.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "Graphics/Licenses/SPIRV-Tools.txt": "7d52847928f607914a1218a7afd40d8d0fe1570dcf094205c276c8aa52d5a816",
+    "Graphics/Licenses/Vulkan-Loader.txt": "43c0a37e6a0fa7ff3c843b3ec5a4fac84b712558ddac103fbd4c1649662a9ece",
+    "Graphics/Licenses/Wine-LGPL-2.1.txt": "e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c",
+    "Graphics/Licenses/Wine-Steam-Attribution.txt": "14df8512b24ad5e908c78b6731a1878543e9be1f0ef8855e20b2ba24a8346d6b",
+    "Graphics/Sources.json": "c74d1d2cb97d3428af8be5288e481048a783efe95b082e1c52d4a478e35bf0c4",
+    "Graphics/Version": "f98fc81a6353f284628c0f9d7d871e16b2ce00bae813303f7d99eaff3b040469",
+    "Graphics/kosmickrisp_icd.json": "c418031e39157455c419926184a4ffbe8515256ecc5b003ac3f31f3635f449db",
+    "Graphics/libMoltenVK.dylib": "cbf2ea45d6350c5f629e0cdf919b97ec7169e716129f676f0a7fd68bc05cbdf0",
+    "Graphics/libvulkan.1.dylib": "92a81815b5d9229ef089810d9a3c8301fdbd8dc89c5fd71fd154a140684109c4",
+    "Graphics/libvulkan_kosmickrisp.dylib": "3db27858c09b70b3c421f92d3ef55485706e5fadf743287c5799f5f283284e3a",
+    "Graphics/moltenvk_icd.json": "f6430fe201008cf5397e0f725942070863cc2418024ae685e38a7619b0271288",
+    "MetalEngine/Engine/lib/libvulkan.1.dylib": "92a81815b5d9229ef089810d9a3c8301fdbd8dc89c5fd71fd154a140684109c4",
+    "MetalEngine/Engine/lib/wine/x86_64-unix/ntdll.so": "fa4d866594a53ae4af3fa058db86a6f0b5c38f07cec3fafc307bfb9d7fc6bfd7",
+    "MetalEngine/Engine/lib/wine/x86_64-unix/win32u.so": "3d8692dd1ef1c8cb7716b0520f867b130cd3e096525c3d10f8cdcc51158e48f3",
+    "MetalEngine/Engine/lib/wine/x86_64-unix/winemac.so": "498b4dc3537d59939e161060b6849d6ea6cbe92d6ca300bfcba9a3e3df195c4f",
+    "MetalEngine/Engine/lib/wine/x86_64-unix/winevulkan.so": "c7845d67595a54a610a7148018430a5232d3a9d6fd56f9e03472ef38d54c6e1e",
+    "Wine/lib/libvulkan.1.dylib": "92a81815b5d9229ef089810d9a3c8301fdbd8dc89c5fd71fd154a140684109c4",
+    "Wine/lib/wine/x86_64-unix/winevulkan.so": "c7845d67595a54a610a7148018430a5232d3a9d6fd56f9e03472ef38d54c6e1e"
+  }
+}

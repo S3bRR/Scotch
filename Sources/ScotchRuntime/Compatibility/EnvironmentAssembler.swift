@@ -13,6 +13,7 @@ public struct EnvironmentAssembler {
         bottle: BottleSummary,
         extra: [String: String] = [:]
     ) -> [String: String] {
+        let paths = paths.forBottle(bottle)
         var environment: [String: String] = [
             "WINEPREFIX": bottle.directoryURL.path(percentEncoded: false),
             "WINEDEBUG": "fixme-all",
@@ -28,12 +29,44 @@ public struct EnvironmentAssembler {
 
         applyCompatibilityEnvironment(settings: bottle.settings, environment: &environment)
 
-        if let identity = bottle.settings.resolvedGPUIdentity() {
+        let backend = bottle.settings.backend.backend
+        if backend == .dxvk {
+            // Wine's builtin DXGI enumerates adapters through WineD3D. Its
+            // default OpenGL path can enter Apple's deprecated CGL renderer
+            // even though DXVK itself uses Vulkan, crashing 32-bit startup.
+            environment["WINE_D3D_CONFIG"] = "renderer=vulkan"
+        }
+        environment["GRAPHICS_BACKEND"] = backend == .dxmt || backend == .d3dmetal ? backend.rawValue : "wine"
+        if paths.usesMetalEngine {
+            environment["DYLD_LIBRARY_PATH"] = paths.wineRootDirectory.appending(path: "lib").path
+            environment["DXMT_RUNTIME_DIR"] = paths.librariesDirectory.appending(path: "DXMT").path
+        }
+        if backend == .d3dmetal {
+            let root = paths.librariesDirectory.appending(path: "D3DMetal")
+            environment["D3DMETAL_RUNTIME_DIR"] = root.path
+            environment["D3DMETAL_UNIXLIB_DIR"] = root.appending(path: "wine/x86_64-unix").path
+        } else if backend == .dxmt {
+            let root = paths.librariesDirectory.appending(path: "DXMT").path
+            environment["DXMT_RUNTIME_DIR"] = root
+            // winemetal is an additional builtin, rather than a replacement for
+            // a stock Wine DLL. Register its PE tree for builtin discovery too.
+            environment["WINEDLLPATH"] = root
+        }
+        let graphics = paths.librariesDirectory.appending(path: "Graphics")
+        let hasRouter = FileManager.default.fileExists(atPath: graphics.appending(path: "libvulkan.1.dylib").path)
+        if hasRouter {
+            environment["DYLD_LIBRARY_PATH"] = graphics.path + ":" + paths.wineRootDirectory.appending(path: "lib").path
+            environment["MESA_KK_EXPERIMENTAL"] = "custom_border,xfb"
+        }
+
+        // The router applies Vulkan identity overrides only to MoltenVK; Zink's
+        // actual GPU identity remains available to Mesa's driver workarounds.
+        if let identity = bottle.settings.resolvedGPUIdentity(), backend == .dxvk {
             let shimPath = paths.librariesDirectory
                 .appending(path: "VulkanSpoof")
                 .appending(path: "libscotch_gpu_spoof.dylib")
                 .path(percentEncoded: false)
-            environment["SCOTCH_GPU_SPOOF_LIB"] = shimPath
+            if !hasRouter { environment["SCOTCH_GPU_SPOOF_LIB"] = shimPath }
             environment["SCOTCH_GPU_VENDOR_ID"] = String(identity.vendorId, radix: 16)
             environment["SCOTCH_GPU_DEVICE_ID"] = String(identity.deviceId, radix: 16)
             environment["SCOTCH_GPU_DEVICE_NAME"] = identity.description

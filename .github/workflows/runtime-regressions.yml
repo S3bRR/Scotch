@@ -16,6 +16,16 @@ jobs:
       - name: Swift version
         run: swift --version
       - name: Build command-line release
-        run: swift build -c release --product ScotchCmd
+        run: swift build --build-system native -c release --product ScotchCmd
       - name: Resolve resources from a relocated app
         run: bash scripts/test_relocated_resources.sh
+      - name: Verify Steam launch and legacy helper recovery
+        run: bash scripts/test_steam.sh
+      - name: Verify application graphics detection and selection
+        run: bash scripts/test_program_graphics.sh
+      - name: Verify bottle setup helpers from a relocated app
+        run: bash scripts/test_bottle_creation.sh
+      - name: Verify runtime setup and overlay failure recovery
+        run: bash scripts/test_runtime_installation.sh
+      - name: Verify update authentication, preservation, routing, and rollback
+        run: bash scripts/test_updates.sh

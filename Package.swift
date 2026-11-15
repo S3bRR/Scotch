@@ -16,7 +16,9 @@ let package = Package(
         .executable(name: "ScotchCmd", targets: ["ScotchCmd"]),
         .executable(name: "ScotchApp", targets: ["ScotchApp"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1")
+    ],
     targets: [
         .target(
             name: "ScotchDomain",
@@ -51,7 +53,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "ScotchApp",
-            dependencies: ["ScotchFeatures"],
+            dependencies: ["ScotchFeatures", .product(name: "Sparkle", package: "Sparkle")],
             exclude: [
                 "Info.plist",
                 "Scotch.entitlements",
@@ -59,6 +61,7 @@ let package = Package(
             ],
             linkerSettings: [
                 .unsafeFlags([
+                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",

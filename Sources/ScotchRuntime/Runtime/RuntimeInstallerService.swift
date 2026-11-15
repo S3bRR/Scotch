@@ -1,69 +1,17 @@
 import Foundation
+import Darwin
 import ScotchDomain
 import ScotchInfrastructure
-
-private struct GitHubReleaseResponse: Decodable {
-    struct Asset: Decodable {
-        let name: String
-        let browserDownloadURL: URL
-        let size: Int64
-
-        enum CodingKeys: String, CodingKey {
-            case name
-            case browserDownloadURL = "browser_download_url"
-            case size
-        }
-    }
-
-    let tagName: String
-    let draft: Bool?
-    let prerelease: Bool?
-    let assets: [Asset]
-
-    enum CodingKeys: String, CodingKey {
-        case tagName = "tag_name"
-        case draft
-        case prerelease
-        case assets
-    }
-}
-
-private struct RuntimeAssetRequirement: Sendable {
-    let displayName: String
-    let repo: String
-    let versionTag: String
-    let assetNamePatterns: [String]
-}
 
 public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     private enum OverlayVersion {
         /// Gcenx Wine 11.16 is built `--without-opengl`. The 11.6 byte patch
         /// must not be overlaid onto a different winemac.so.
         static let winemac = "stock-11.16"
-        static let d3dmetal = "d3dmetal-3.0"
-        static let zink = "zink-2.0"
+        static let d3dmetal = D3DMetalInstallation.version
+        static let zink = "mesa-26.2.0"
     }
 
-    private enum RuntimeMatrix {
-        static let wine = RuntimeAssetRequirement(
-            displayName: "Wine",
-            repo: "Gcenx/macOS_Wine_builds",
-            versionTag: "11.16",
-            assetNamePatterns: ["wine-staging-", "-osx64"]
-        )
-        static let dxvk = RuntimeAssetRequirement(
-            displayName: "DXVK",
-            repo: "Gcenx/DXVK-macOS",
-            versionTag: "v1.10.3-20230507-repack",
-            assetNamePatterns: ["dxvk-macOS-async", "-repack.tar"]
-        )
-        static let dxmt = RuntimeAssetRequirement(
-            displayName: "DXMT",
-            repo: "3Shain/dxmt",
-            versionTag: "v0.80",
-            assetNamePatterns: ["dxmt-", "builtin.tar"]
-        )
-    }
 
     private let paths: AppPaths
     private let fileSystem: LocalFileSystem
@@ -71,6 +19,10 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     private let plistStore: PlistStore
     private let processRunner: ProcessRunner
     private let networkClient: NetworkClient
+    private let installSession = UUID().uuidString
+    private var scratchRoot: URL { paths.applicationSupportDirectory.appending(path: "InstallSessions/" + installSession) }
+    private var downloadsRoot: URL { FileManager.default.temporaryDirectory.appending(path: "ScotchRuntimeDownloads/" + installSession) }
+    private let approvedRuntime: ApprovedRuntimeSet?
 
     public init(
         paths: AppPaths,
@@ -78,7 +30,8 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         logger: AppLogger,
         plistStore: PlistStore,
         processRunner: ProcessRunner,
-        networkClient: NetworkClient = DefaultNetworkClient()
+        networkClient: NetworkClient = DefaultNetworkClient(),
+        approvedRuntime: ApprovedRuntimeSet? = nil
     ) {
         self.paths = paths
         self.fileSystem = fileSystem
@@ -86,28 +39,22 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         self.plistStore = plistStore
         self.processRunner = processRunner
         self.networkClient = networkClient
+        self.approvedRuntime = approvedRuntime
     }
 
     public func isRuntimeInstalled() async -> Bool {
-        guard fileSystem.fileExists(at: paths.runtimeManifestURL) else {
-            return false
-        }
-        guard let manifest = try? await plistStore.read(RuntimeManifest.self, from: paths.runtimeManifestURL) else {
-            return false
-        }
-        guard (try? validateManifest(manifest)) != nil else {
-            return false
-        }
-        return hasRequiredRuntimeArtifacts()
+        await currentManifest() != nil
     }
 
     public func currentManifest() async -> RuntimeManifest? {
-        guard hasRequiredRuntimeArtifacts() else {
-            return nil
-        }
         do {
-            let manifest = try await plistStore.read(RuntimeManifest.self, from: paths.runtimeManifestURL)
+            var manifest = try await plistStore.read(RuntimeManifest.self, from: paths.runtimeManifestURL)
             try validateManifest(manifest)
+            try verifyInstalledArtifacts()
+            if manifest.d3dmetalVersion != nil, (try? verifyOverlayInstall(component: .d3dmetal)) == nil {
+                // A damaged optional backend must not disable the other backends.
+                manifest.d3dmetalVersion = nil
+            }
             return manifest
         } catch {
             return nil
@@ -115,17 +62,17 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     public func fetchLatestReleases() async throws -> RuntimeReleases {
-        async let wine = fetchAsset(RuntimeMatrix.wine)
-        async let dxvk = fetchAsset(RuntimeMatrix.dxvk)
-        async let dxmt = fetchAsset(RuntimeMatrix.dxmt)
-        return RuntimeReleases(wine: try await wine, dxvk: try await dxvk, dxmt: try await dxmt)
+        if let approvedRuntime, let wine = approvedRuntime.package(.wine), let dxvk = approvedRuntime.package(.dxvk), let dxmt = approvedRuntime.package(.dxmt) {
+            return RuntimeReleases(wine: wine.asset, dxvk: dxvk.asset, dxmt: dxmt.asset)
+        }
+        return RuntimeReleases(wine: RuntimeAssets.wine, dxvk: RuntimeAssets.dxvk, dxmt: RuntimeAssets.dxmt)
     }
 
     public func downloadAll(
         releases: RuntimeReleases,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> DownloadedRuntimeArchives {
-        let temp = FileManager.default.temporaryDirectory.appending(path: "ScotchRuntimeDownloads")
+        let temp = downloadsRoot
         if fileSystem.fileExists(at: temp) {
             try fileSystem.removeItem(at: temp)
         }
@@ -153,7 +100,13 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     public func installAll(from archives: DownloadedRuntimeArchives) async throws -> (RuntimeManifest, [OverlayInstallResult]) {
-        try ensureDiskSpace(requiredBytes: archives.runtimeReleases.wine.size + archives.runtimeReleases.dxvk.size + archives.runtimeReleases.dxmt.size)
+        defer { cleanupTransientInstallFiles() }
+        let installationLock = try InstallationLock(at: paths.applicationSupportDirectory.appending(path: "RuntimeInstallation.lock"))
+        defer { withExtendedLifetime(installationLock) {} }
+        guard archives.runtimeReleases.wine.versionTag == "11.16" else {
+            throw RuntimeInstallerError.installFailed("This Wine build requires a newer Scotch with matching graphics support.")
+        }
+        try ensureDiskSpace(requiredBytes: 2_500_000_000)
 
         try fileSystem.createDirectory(at: paths.applicationSupportDirectory)
 
@@ -169,18 +122,22 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         do {
             try fileSystem.createDirectory(at: libraries)
             try await installWine(from: archives.wineArchive)
+            try await installMetalEngine()
             try await installTranslationLibrary(componentName: "DXVK", archive: archives.dxvkArchive, destination: libraries.appending(path: "DXVK"))
             try await installTranslationLibrary(componentName: "DXMT", archive: archives.dxmtArchive, destination: libraries.appending(path: "DXMT"))
 
+            try await installGraphicsSupport()
+
             let overlayResults = try await [
                 installOverlay(component: .winemacOpenGLPatch),
-                installOverlay(component: .d3dmetal),
+                installOptionalD3DMetal(previousLibraries: hadExistingInstall ? backupURL : nil),
                 installOverlay(component: .zink)
             ]
 
             try await installGPUSpoofShim()
 
             let manifest = RuntimeManifest(
+                runtimeSetID: approvedRuntime?.id,
                 wineVersion: archives.runtimeReleases.wine.versionTag,
                 dxvkVersion: archives.runtimeReleases.dxvk.versionTag,
                 dxmtVersion: archives.runtimeReleases.dxmt.versionTag,
@@ -191,6 +148,9 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
 
             try validateManifest(manifest)
             try verifyInstalledArtifacts()
+            try MetalEngineInstallation.verify(in: libraries)
+            try MetalEngineInstallation.verifyDXMT(in: libraries)
+            try GraphicsSupportInstallation.verify(in: libraries)
             await stripQuarantine(at: libraries)
 
             try await WineBundleSigning(processRunner: processRunner).verify(at: paths.wineBundleURL)
@@ -208,6 +168,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             if hadExistingInstall, fileSystem.fileExists(at: backupURL) {
                 try? fileSystem.moveItem(at: backupURL, to: libraries)
             }
+            cleanupTransientInstallFiles()
             throw error
         }
     }
@@ -216,9 +177,9 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         guard let manifest = await currentManifest() else {
             return (false, AppVersion(0, 0, 0))
         }
-        let expectedWine = RuntimeMatrix.wine.versionTag
-        let expectedDXVK = RuntimeMatrix.dxvk.versionTag
-        let expectedDXMT = RuntimeMatrix.dxmt.versionTag
+        let expectedWine = (approvedRuntime?.package(.wine)?.version ?? RuntimeAssets.wine.versionTag)
+        let expectedDXVK = approvedRuntime?.package(.dxvk)?.version ?? RuntimeAssets.dxvk.versionTag
+        let expectedDXMT = approvedRuntime?.package(.dxmt)?.version ?? RuntimeAssets.dxmt.versionTag
         let expectedVersion = AppVersion(parsing: expectedWine) ?? AppVersion(0, 0, 0)
         return (
             manifest.wineVersion != expectedWine ||
@@ -234,62 +195,16 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         }
 
         var drifts: [OverlayDrift] = []
-        if manifest.winemacPatchVersion != OverlayVersion.winemac {
-            drifts.append(OverlayDrift(component: .winemacOpenGLPatch, installedVersion: manifest.winemacPatchVersion, expectedVersion: OverlayVersion.winemac))
+        if manifest.winemacPatchVersion != ("stock-" + (approvedRuntime?.package(.wine)?.version ?? RuntimeAssets.wine.versionTag)) {
+            drifts.append(OverlayDrift(component: .winemacOpenGLPatch, installedVersion: manifest.winemacPatchVersion, expectedVersion: ("stock-" + (approvedRuntime?.package(.wine)?.version ?? RuntimeAssets.wine.versionTag))))
         }
-        if manifest.d3dmetalVersion != OverlayVersion.d3dmetal {
+        if let installed = manifest.d3dmetalVersion, installed != OverlayVersion.d3dmetal {
             drifts.append(OverlayDrift(component: .d3dmetal, installedVersion: manifest.d3dmetalVersion, expectedVersion: OverlayVersion.d3dmetal))
         }
-        if manifest.zinkVersion != OverlayVersion.zink {
-            drifts.append(OverlayDrift(component: .zink, installedVersion: manifest.zinkVersion, expectedVersion: OverlayVersion.zink))
+        if manifest.zinkVersion != (approvedRuntime.map { "mesa-" + ($0.package(.zink)?.version ?? "unknown") } ?? OverlayVersion.zink) {
+            drifts.append(OverlayDrift(component: .zink, installedVersion: manifest.zinkVersion, expectedVersion: (approvedRuntime.map { "mesa-" + ($0.package(.zink)?.version ?? "unknown") } ?? OverlayVersion.zink)))
         }
         return drifts
-    }
-
-    private func fetchAsset(_ requirement: RuntimeAssetRequirement) async throws -> ReleaseAsset {
-        guard let url = URL(string: "https://api.github.com/repos/\(requirement.repo)/releases/tags/\(requirement.versionTag)") else {
-            throw RuntimeInstallerError.invalidURL
-        }
-
-        let request = NetworkRequest(
-            url: url,
-            headers: ["Accept": "application/vnd.github+json"]
-        )
-
-        do {
-            let data = try await networkClient.data(for: request)
-            let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
-            guard release.tagName == requirement.versionTag else {
-                throw RuntimeInstallerError.releaseDiscoveryFailed(
-                    "\(requirement.repo): expected tag \(requirement.versionTag), got \(release.tagName)"
-                )
-            }
-            if release.draft == true {
-                throw RuntimeInstallerError.releaseDiscoveryFailed("\(requirement.repo): release \(requirement.versionTag) is marked as draft")
-            }
-            if release.prerelease == true {
-                throw RuntimeInstallerError.releaseDiscoveryFailed("\(requirement.repo): release \(requirement.versionTag) is marked as prerelease")
-            }
-            let asset = release.assets.first(where: { asset in
-                requirement.assetNamePatterns.allSatisfy { asset.name.contains($0) }
-            })
-
-            guard let matched = asset else {
-                throw RuntimeInstallerError.missingAsset("\(requirement.displayName) \(requirement.versionTag) in \(requirement.repo)")
-            }
-
-            return ReleaseAsset(
-                name: matched.name,
-                versionTag: requirement.versionTag,
-                downloadURL: matched.browserDownloadURL,
-                size: matched.size,
-                sha256: await resolveChecksumIfAvailable(for: matched.name, in: release.assets)
-            )
-        } catch let error as RuntimeInstallerError {
-            throw error
-        } catch {
-            throw RuntimeInstallerError.releaseDiscoveryFailed("\(requirement.repo): \(error.localizedDescription)")
-        }
     }
 
     private func downloadAsset(
@@ -297,17 +212,35 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         into directory: URL,
         reportBytes: @Sendable @escaping (Int64) -> Void
     ) async throws -> URL {
+        guard asset.name == URL(fileURLWithPath: asset.name).lastPathComponent, !asset.name.hasPrefix(".") else {
+            throw RuntimeInstallerError.downloadFailed("Invalid asset filename")
+        }
         let destination = directory.appending(path: asset.name)
-
+        let cache = asset.sha256.map { paths.cachesDirectory.appending(path: "RuntimePackages/" + $0.lowercased()) }
+        if let cache, fileSystem.fileExists(at: cache), let expected = asset.sha256,
+           (try? SHA256Checksum.hashFile(at: cache)) == expected.lowercased() {
+            if fileSystem.fileExists(at: destination) { try fileSystem.removeItem(at: destination) }
+            try fileSystem.copyItem(at: cache, to: destination)
+            reportBytes(asset.size)
+            return destination
+        }
         do {
             let temporaryFile = try await networkClient.download(from: NetworkRequest(url: asset.downloadURL))
             if fileSystem.fileExists(at: destination) {
                 try fileSystem.removeItem(at: destination)
             }
             try fileSystem.moveItem(at: temporaryFile, to: destination)
+            if asset.size > 0 {
+                let bytes = try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard Int64(bytes) == asset.size else { throw RuntimeInstallerError.downloadFailed("Unexpected file size for \(asset.name)") }
+            }
             if let expectedChecksum = asset.sha256 {
                 try verifyChecksum(expectedChecksum, for: destination, assetName: asset.name)
             }
+            let contentCache = try cache ?? paths.cachesDirectory.appending(path: "RuntimePackages/" + SHA256Checksum.hashFile(at: destination))
+            try fileSystem.createDirectory(at: contentCache.deletingLastPathComponent())
+            if fileSystem.fileExists(at: contentCache) { try fileSystem.removeItem(at: contentCache) }
+            try fileSystem.copyItem(at: destination, to: contentCache)
             reportBytes(asset.size)
             return destination
         } catch let NetworkClientError.nonSuccessStatus(_, status) {
@@ -322,7 +255,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     private func installWine(from archive: URL) async throws {
-        let scratch = paths.applicationSupportDirectory.appending(path: "wine-scratch")
+        let scratch = scratchRoot.appending(path: "wine")
         if fileSystem.fileExists(at: scratch) {
             try fileSystem.removeItem(at: scratch)
         }
@@ -359,7 +292,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     }
 
     private func installTranslationLibrary(componentName: String, archive: URL, destination: URL) async throws {
-        let scratch = paths.applicationSupportDirectory.appending(path: "\(componentName.lowercased())-scratch")
+        let scratch = scratchRoot.appending(path: componentName.lowercased())
         if fileSystem.fileExists(at: scratch) {
             try fileSystem.removeItem(at: scratch)
         }
@@ -396,11 +329,24 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             try fileSystem.removeItem(at: destination)
         }
         try fileSystem.createDirectory(at: destination)
-        try fileSystem.moveItem(at: x64Dir, to: destination.appending(path: "x64"))
-        try fileSystem.moveItem(at: x32Dir, to: destination.appending(path: "x32"))
+        try fileSystem.moveItem(at: x64Dir, to: destination.appending(path: componentName == "DXMT" ? "x86_64-windows" : "x64"))
+        try fileSystem.moveItem(at: x32Dir, to: destination.appending(path: componentName == "DXMT" ? "i386-windows" : "x32"))
 
-        for unix in unixDirs {
-            try mergeWineExtension(from: unix)
+        let componentRoot = x64Dir.deletingLastPathComponent()
+        for notice in (try? fileSystem.contentsOfDirectory(at: componentRoot)) ?? [] {
+            let name = notice.lastPathComponent.uppercased()
+            if name.hasPrefix("LICENSE") || name.hasPrefix("COPYING") || name.hasPrefix("README") || name == "AUTHORS" {
+                try fileSystem.copyItem(at: notice, to: destination.appending(path: notice.lastPathComponent))
+            }
+        }
+        if componentName == "DXMT" {
+            for unix in unixDirs {
+                try fileSystem.copyItem(at: unix, to: destination.appending(path: unix.lastPathComponent))
+            }
+            try FileManager.default.createSymbolicLink(atPath: destination.appending(path: "x64").path, withDestinationPath: "x86_64-windows")
+            try FileManager.default.createSymbolicLink(atPath: destination.appending(path: "x32").path, withDestinationPath: "i386-windows")
+        } else {
+            for unix in unixDirs { try mergeWineExtension(from: unix) }
         }
 
         try? fileSystem.removeItem(at: scratch)
@@ -426,8 +372,8 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         }
     }
 
-    private func createWineAppBundle() throws {
-        let bundleURL = paths.wineBundleURL
+    private func createWineAppBundle(at bundleURL: URL? = nil, engineDirectory: String = "Wine") throws {
+        let bundleURL = bundleURL ?? paths.wineBundleURL
         let contents = bundleURL.appending(path: "Contents")
         let macOS = contents.appending(path: "MacOS")
 
@@ -437,7 +383,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         try fileSystem.createDirectory(at: macOS)
 
         let launcherURL = macOS.appending(path: "wine-launcher")
-        try wineLauncherScript.write(to: launcherURL, atomically: true, encoding: .utf8)
+        try wineLauncherScript(engineDirectory: engineDirectory).write(to: launcherURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcherURL.path(percentEncoded: false))
         try wineInfoPlist.write(to: contents.appending(path: "Info.plist"), atomically: true, encoding: .utf8)
     }
@@ -445,34 +391,277 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
     private func installOverlay(component: OverlayComponent) async throws -> OverlayInstallResult {
         if component == .winemacOpenGLPatch {
             try verifyOverlayInstall(component: .winemacOpenGLPatch)
-            logger.info("Using stock winemac.so from Wine \(RuntimeMatrix.wine.versionTag)")
+            logger.info("Using stock winemac.so from Wine \((approvedRuntime?.package(.wine)?.version ?? RuntimeAssets.wine.versionTag))")
             return OverlayInstallResult(
                 component: component,
-                installedVersion: OverlayVersion.winemac,
+                installedVersion: ("stock-" + (approvedRuntime?.package(.wine)?.version ?? RuntimeAssets.wine.versionTag)),
                 errorMessage: nil
             )
         }
 
-        let descriptor = overlayDescriptor(for: component)
-        guard let url = URL(string: "https://github.com/S3bRR/Scotch/releases/download/\(descriptor.versionTag)/\(descriptor.fileName)") else {
-            throw RuntimeInstallerError.installFailed("Invalid overlay URL for \(component.displayName)")
+        if component == .zink {
+            try await installZink()
+            try verifyOverlayInstall(component: .zink)
+            logger.info("Installed Mesa Zink \(RuntimeAssets.zink.versionTag)")
+            return OverlayInstallResult(component: .zink, installedVersion: (approvedRuntime.map { "mesa-" + ($0.package(.zink)?.version ?? "unknown") } ?? OverlayVersion.zink), errorMessage: nil)
         }
 
-        let archive = try await downloadOverlay(from: url, fileName: descriptor.fileName)
-        try await TarArchive.extract(archive, to: descriptor.extractDestination, using: processRunner)
+        try await installD3DMetal()
         try verifyOverlayInstall(component: component)
-        logger.info("Installed overlay \(component.displayName) version \(descriptor.versionTag)")
-        return OverlayInstallResult(component: component, installedVersion: descriptor.versionTag, errorMessage: nil)
+        logger.info("Installed overlay \(component.displayName) version \(OverlayVersion.d3dmetal)")
+        return OverlayInstallResult(component: component, installedVersion: approvedRuntime?.package(.d3dmetal)?.version ?? OverlayVersion.d3dmetal, errorMessage: nil)
     }
 
-    private func overlayDescriptor(for component: OverlayComponent) -> (versionTag: String, fileName: String, extractDestination: URL) {
-        switch component {
-        case .winemacOpenGLPatch:
-            (OverlayVersion.winemac, "winemac-openglpatch-11.6.tar.gz", paths.librariesDirectory.appending(path: "Wine"))
-        case .d3dmetal:
-            (OverlayVersion.d3dmetal, "d3dmetal-3.0.tar.gz", paths.librariesDirectory)
-        case .zink:
-            (OverlayVersion.zink, "zink-2.0.tar.gz", paths.librariesDirectory)
+    public func needsGraphicsRepair() async -> Bool {
+        guard paths.runtimeDirectoryOverride == nil,
+              let manifest = try? await plistStore.read(RuntimeManifest.self, from: paths.runtimeManifestURL),
+              manifest.wineVersion == "11.16" else { return false }
+        do {
+            try MetalEngineInstallation.verify(in: paths.librariesDirectory)
+            try MetalEngineInstallation.verifyDXMT(in: paths.librariesDirectory)
+            try GraphicsSupportInstallation.verify(in: paths.librariesDirectory)
+            try D3DMetalInstallation.verify(at: paths.librariesDirectory.appending(path: "D3DMetal"))
+            try verifyOverlayInstall(component: .zink)
+            for arch in ["x64", "x32"] {
+                for name in ["d3d10core", "d3d11"] {
+                    try PackageArchitecture.verifyPE(at: paths.librariesDirectory.appending(path: "DXVK/\(arch)/\(name).dll"), machine: arch == "x64" ? 0x8664 : 0x014c)
+                }
+            }
+            guard manifest.dxvkVersion == RuntimeAssets.dxvk.versionTag, manifest.dxmtVersion == RuntimeAssets.dxmt.versionTag,
+                  manifest.zinkVersion == OverlayVersion.zink,
+                  (try? String(contentsOf: paths.librariesDirectory.appending(path: "MetalEngine/Wine.app/Contents/MacOS/wine-launcher"), encoding: .utf8)) == wineLauncherScript(engineDirectory: "Engine"),
+                  (try? SHA256Checksum.hashFile(at: paths.librariesDirectory.appending(path: "Wine/lib/wine/x86_64-unix/winemac.so"))) == RuntimeAssets.stockMacDriverSHA256 else { return true }
+            return false
+        } catch { return true }
+    }
+
+    /// Stage a complete copy and exchange the runtime directory atomically. No
+    /// prefix is opened; a failure leaves every previously installed file active.
+    public func repairGraphics() async throws {
+        let lease = try UpdateActivity.shared.acquireMaintenance()
+        defer { withExtendedLifetime(lease) {}; cleanupTransientInstallFiles() }
+        let lock = try InstallationLock(at: paths.applicationSupportDirectory.appending(path: "RuntimeInstallation.lock"))
+        defer { withExtendedLifetime(lock) {} }
+        guard paths.runtimeDirectoryOverride == nil,
+              var manifest = try? await plistStore.read(RuntimeManifest.self, from: paths.runtimeManifestURL),
+              manifest.wineVersion == "11.16" else {
+            throw RuntimeInstallerError.installFailed("Install the core Wine 11.16 runtime before repairing graphics support.")
+        }
+        try ensureDiskSpace(requiredBytes: 3_000_000_000)
+        var stagedPaths = paths
+        stagedPaths.runtimeDirectoryOverride = scratchRoot.appending(path: "repaired-libraries")
+        try fileSystem.createDirectory(at: stagedPaths.librariesDirectory.deletingLastPathComponent())
+        try fileSystem.copyItem(at: paths.librariesDirectory, to: stagedPaths.librariesDirectory)
+        let installer = RuntimeInstallerService(paths: stagedPaths, fileSystem: fileSystem, logger: logger,
+            plistStore: plistStore, processRunner: processRunner, networkClient: networkClient)
+        try await installer.installGraphicsForRepair()
+        manifest.d3dmetalVersion = D3DMetalInstallation.version
+        manifest.dxmtVersion = RuntimeAssets.dxmt.versionTag
+        manifest.dxvkVersion = RuntimeAssets.dxvk.versionTag
+        manifest.zinkVersion = OverlayVersion.zink
+        manifest.winemacPatchVersion = OverlayVersion.winemac
+        try await plistStore.write(manifest, to: stagedPaths.runtimeManifestURL)
+        await stripQuarantine(at: stagedPaths.librariesDirectory)
+        try Task.checkCancellation()
+        guard !UpdateActivity.shared.hasRunningWineProcesses else {
+            throw RuntimeInstallerError.installFailed("Close Wine processes before activating the graphics repair.")
+        }
+        guard renamex_np(stagedPaths.librariesDirectory.path, paths.librariesDirectory.path, UInt32(RENAME_SWAP)) == 0 else {
+            throw RuntimeInstallerError.installFailed("Unable to activate graphics support. The previous runtime is unchanged.")
+        }
+    }
+
+    private func installGraphicsForRepair() async throws {
+        defer { cleanupTransientInstallFiles() }
+        try await restoreStockMacDriverIfNeeded()
+        try await installMetalEngine()
+        let dxvk = try await downloadAsset(RuntimeAssets.dxvk, into: scratchRoot) { _ in }
+        try await installTranslationLibrary(componentName: "DXVK", archive: dxvk, destination: paths.librariesDirectory.appending(path: "DXVK"))
+        let archive = try await downloadAsset(RuntimeAssets.dxmt, into: scratchRoot) { _ in }
+        try await installTranslationLibrary(componentName: "DXMT", archive: archive, destination: paths.librariesDirectory.appending(path: "DXMT"))
+        try await installGraphicsSupport()
+        try await installZink()
+        try await installD3DMetal()
+        try MetalEngineInstallation.verify(in: paths.librariesDirectory)
+        try MetalEngineInstallation.verifyDXMT(in: paths.librariesDirectory)
+        try GraphicsSupportInstallation.verify(in: paths.librariesDirectory)
+        try D3DMetalInstallation.verify(at: paths.librariesDirectory.appending(path: "D3DMetal"))
+        try verifyInstalledArtifacts()
+    }
+
+    private func restoreStockMacDriverIfNeeded() async throws {
+        let target = paths.librariesDirectory.appending(path: "Wine/lib/wine/x86_64-unix/winemac.so")
+        guard (try? SHA256Checksum.hashFile(at: target)) != RuntimeAssets.stockMacDriverSHA256 else { return }
+        let scratch = scratchRoot.appending(path: "stock-mac-driver")
+        try fileSystem.createDirectory(at: scratch)
+        let archive = try await downloadAsset(RuntimeAssets.wine, into: scratch) { _ in }
+        try await TarArchive.extract(archive, to: scratch, using: processRunner, members: [RuntimeAssets.stockMacDriverMember])
+        let source = scratch.appending(path: RuntimeAssets.stockMacDriverMember)
+        guard try SHA256Checksum.hashFile(at: source) == RuntimeAssets.stockMacDriverSHA256 else {
+            throw RuntimeInstallerError.installFailed("The stock Wine Mac driver failed verification.")
+        }
+        if fileSystem.fileExists(at: target) { try fileSystem.removeItem(at: target) }
+        try fileSystem.copyItem(at: source, to: target)
+    }
+
+    private func installGraphicsSupport() async throws {
+        guard let archive = RuntimeResources.bundled.url(forResource: "GraphicsSupport", withExtension: "tar.xz"),
+              try SHA256Checksum.hashFile(at: archive) == GraphicsSupportInstallation.archiveSHA256 else {
+            throw RuntimeInstallerError.installFailed("The app's graphics support is missing or damaged. Reinstall Scotch.")
+        }
+        let scratch = scratchRoot.appending(path: "graphics-support")
+        try fileSystem.createDirectory(at: scratch)
+        try await TarArchive.extract(archive, to: scratch, using: processRunner)
+        try GraphicsSupportInstallation.verify(in: scratch)
+        for member in GraphicsSupportInstallation.files.keys {
+            let source = scratch.appending(path: member)
+            let target = paths.librariesDirectory.appending(path: member)
+            try fileSystem.createDirectory(at: target.deletingLastPathComponent())
+            guard target.deletingLastPathComponent().resolvingSymlinksInPath().path.hasPrefix(paths.librariesDirectory.resolvingSymlinksInPath().path + "/") else {
+                throw RuntimeInstallerError.installFailed("Unexpected graphics directory layout. The previous runtime is unchanged.")
+            }
+            if fileSystem.fileExists(at: target) || (try? FileManager.default.destinationOfSymbolicLink(atPath: target.path)) != nil { try fileSystem.removeItem(at: target) }
+            try fileSystem.copyItem(at: source, to: target)
+        }
+        try GraphicsSupportInstallation.verify(in: paths.librariesDirectory)
+    }
+
+    private func installMetalEngine() async throws {
+        try ensureDiskSpace(requiredBytes: 1_500_000_000)
+        let scratch = scratchRoot.appending(path: "metal-engine")
+        try fileSystem.createDirectory(at: scratch)
+        let engineImage = try await downloadAsset(MetalEngineInstallation.asset, into: scratch) { _ in }
+        let destination = paths.librariesDirectory.appending(path: "MetalEngine")
+        if fileSystem.fileExists(at: destination) { try fileSystem.removeItem(at: destination) }
+        try fileSystem.createDirectory(at: destination)
+        // Copy only the matching Wine engine and its licenses, never the other
+        // application's launcher or user data. Mount only our unique temp path.
+        let mount = scratch.appending(path: "mount")
+        try fileSystem.createDirectory(at: mount)
+        _ = try await processRunner.captureProcess(ProcessSpecification(
+            executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+            arguments: ["attach", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint", mount.path, "-plist", engineImage.path],
+            displayName: "Mount compatible Metal engine", timeout: 60), outputFileHandle: nil)
+        let detach = ProcessSpecification(executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+            arguments: ["detach", mount.path], displayName: "Eject matched engine image", timeout: 30)
+        do {
+            let resources = mount.appending(path: "WineForge.app/Contents/Resources")
+            try fileSystem.copyItem(at: resources.appending(path: "Engine/WineForgeCore"), to: destination.appending(path: "Engine"))
+            try fileSystem.copyItem(at: resources.appending(path: "Licenses"), to: destination.appending(path: "Licenses"))
+            // WineForge's engine omits Mono/Gecko. Without the matching shared
+            // packages, its first prefix update can open an installer and block
+            // registry commands indefinitely. Reuse the packages supplied by
+            // our pinned core Wine instead of disabling .NET or MSHTML in games.
+            for component in ["mono", "gecko"] {
+                try fileSystem.copyItem(at: paths.librariesDirectory.appending(path: "Wine/share/wine/" + component),
+                    to: destination.appending(path: "Engine/share/wine/" + component))
+            }
+            _ = try await processRunner.captureProcess(detach, outputFileHandle: nil)
+        } catch {
+            _ = try? await processRunner.captureProcess(detach, outputFileHandle: nil)
+            throw error
+        }
+        let bundle = destination.appending(path: "Wine.app")
+        try createWineAppBundle(at: bundle, engineDirectory: "Engine")
+        try await WineBundleSigning(processRunner: processRunner).signAndVerify(at: bundle)
+        let output = try await processRunner.captureProcess(ProcessSpecification(
+            executableURL: destination.appending(path: "Engine/bin/wine"), arguments: ["--version"],
+            environment: ["WINEPREFIX": scratch.appending(path: "probe-prefix").path,
+                          "DYLD_LIBRARY_PATH": destination.appending(path: "Engine/lib").path],
+            displayName: "Verify matched Wine 11.16", timeout: 30), outputFileHandle: nil)
+        guard output.contains("wine-11.16") else { throw RuntimeInstallerError.installFailed("D3DMetal engine version does not match Wine 11.16") }
+        try MetalEngineInstallation.version.write(to: destination.appending(path: "EngineVersion"), atomically: true, encoding: .utf8)
+        try MetalEngineInstallation.verify(in: paths.librariesDirectory)
+        try "WineForge source: https://github.com/Alien4042x/WineForge/tree/0.6.0.3\nOriginal licenses: Licenses/\nScotch build instructions and corresponding source: the Sources folder in the Scotch disk image.\n".write(to: destination.appending(path: "Sources.txt"), atomically: true, encoding: .utf8)
+    }
+
+    private func installD3DMetal(into libraries: URL? = nil) async throws {
+        let package = approvedRuntime?.package(.d3dmetal)
+        guard package == nil || package?.layoutVersion == 3 else {
+            throw RuntimeInstallerError.installFailed("D3DMetal requires GPTK layout 3 and the compatible Metal engine.")
+        }
+        let scratch = scratchRoot.appending(path: "d3dmetal")
+        try fileSystem.createDirectory(at: scratch)
+        let archive = try await downloadAsset(package?.asset ?? D3DMetalInstallation.toolkit, into: scratch) { _ in }
+        let source = scratch.appending(path: D3DMetalInstallation.toolkitLibraryPath)
+        let members = ["external/D3DMetal.framework", "external/libd3dshared.dylib"]
+            + D3DMetalInstallation.modules.flatMap { ["wine/x86_64-windows/\($0).dll", "wine/x86_64-unix/\($0).so"] }
+        try await TarArchive.extract(archive, to: scratch, using: processRunner,
+            members: members.map { D3DMetalInstallation.toolkitLibraryPath + "/" + $0 })
+        let destination = (libraries ?? paths.librariesDirectory).appending(path: "D3DMetal")
+        if fileSystem.fileExists(at: destination) { try fileSystem.removeItem(at: destination) }
+        try fileSystem.moveItem(at: source, to: destination)
+        _ = try await processRunner.captureProcess(ProcessSpecification(
+            executableURL: URL(fileURLWithPath: "/usr/bin/codesign"),
+            arguments: ["--verify", "--deep", "--strict", destination.appending(path: "external/D3DMetal.framework").path],
+            displayName: "Verify D3DMetal framework", timeout: 30), outputFileHandle: nil)
+        try "D3DMetal 3.0: \(D3DMetalInstallation.toolkit.downloadURL)\nOriginal notices: external/D3DMetal.framework/Resources/\n".write(to: destination.appending(path: "Sources.txt"), atomically: true, encoding: .utf8)
+    }
+
+    private func installOptionalD3DMetal(previousLibraries: URL?) async throws -> OverlayInstallResult {
+        if let approvedRuntime, approvedRuntime.package(.d3dmetal) == nil {
+            return OverlayInstallResult(component: .d3dmetal, installedVersion: nil, errorMessage: nil)
+        }
+        do {
+            return try await installOverlay(component: .d3dmetal)
+        } catch {
+            try Task.checkCancellation()
+            // A signed set that includes D3DMetal must be complete before it
+            // can be activated. Optional fallback applies only to bootstrap.
+            if approvedRuntime?.package(.d3dmetal) != nil { throw error }
+            let message = error.localizedDescription
+            let destination = paths.librariesDirectory.appending(path: "D3DMetal")
+            // Never advertise a partially extracted backend as available.
+            if fileSystem.fileExists(at: destination) {
+                try fileSystem.removeItem(at: destination)
+            }
+
+            // A missing download must not discard a working backend during reinstall.
+            if let previousLibraries,
+               let previousManifest = try? await plistStore.read(RuntimeManifest.self, from: previousLibraries.appending(path: RuntimeManifest.fileName)),
+               let version = previousManifest.d3dmetalVersion, !version.isEmpty,
+               fileSystem.fileExists(at: previousLibraries.appending(path: "D3DMetal")) {
+                do {
+                    try fileSystem.copyItem(at: previousLibraries.appending(path: "D3DMetal"), to: destination)
+                    try verifyOverlayInstall(component: .d3dmetal)
+                    logger.warning("D3DMetal download failed; keeping installed \(version): \(message)")
+                    return OverlayInstallResult(component: .d3dmetal, installedVersion: version, errorMessage: "Kept existing D3DMetal. \(message)")
+                } catch {
+                    if fileSystem.fileExists(at: destination) {
+                        try fileSystem.removeItem(at: destination)
+                    }
+                }
+            }
+
+            logger.warning("Continuing without optional D3DMetal: \(message)")
+            return OverlayInstallResult(component: .d3dmetal, installedVersion: nil, errorMessage: message)
+        }
+    }
+
+    private func installZink() async throws {
+        let scratch = scratchRoot.appending(path: "zink")
+        if fileSystem.fileExists(at: scratch) {
+            try fileSystem.removeItem(at: scratch)
+        }
+        try fileSystem.createDirectory(at: scratch)
+        defer { try? fileSystem.removeItem(at: scratch) }
+
+        let archive = try await downloadAsset(approvedRuntime?.package(.zink)?.asset ?? RuntimeAssets.zink, into: scratch) { _ in }
+        // macOS tar (libarchive) supports upstream's 7z format.
+        try await TarArchive.extract(archive, to: scratch, using: processRunner)
+
+        for (sourceArchitecture, destinationArchitecture) in [("x64", "x64"), ("x86", "x32")] {
+            let destination = paths.librariesDirectory.appending(path: "Zink/\(destinationArchitecture)")
+            if fileSystem.fileExists(at: destination) { try fileSystem.removeItem(at: destination) }
+            try fileSystem.createDirectory(at: destination)
+            // Include the Gallium dependency, but not Mesa's unrelated D3D/Vulkan drivers.
+            for name in ["opengl32.dll", "libgallium_wgl.dll", "libEGL.dll", "libGLESv1_CM.dll", "libGLESv2.dll"] {
+                let source = scratch.appending(path: "\(sourceArchitecture)/\(name)")
+                guard fileSystem.fileExists(at: source) else {
+                    throw RuntimeInstallerError.extractionFailed("Mesa Zink archive missing \(sourceArchitecture)/\(name)")
+                }
+                try fileSystem.copyItem(at: source, to: destination.appending(path: name))
+            }
         }
     }
 
@@ -481,107 +670,20 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         case .winemacOpenGLPatch:
             let winemac = paths.librariesDirectory.appending(path: "Wine/lib/wine/x86_64-unix/winemac.so")
             guard fileSystem.fileExists(at: winemac) else {
-                throw RuntimeInstallerError.installFailed("winemac verification failed: winemac.so missing from Wine \(RuntimeMatrix.wine.versionTag)")
+                throw RuntimeInstallerError.installFailed("winemac verification failed: winemac.so missing from Wine \((approvedRuntime?.package(.wine)?.version ?? RuntimeAssets.wine.versionTag))")
             }
         case .d3dmetal:
-            let d3d12DLL = paths.librariesDirectory.appending(path: "D3DMetal/x64/d3d12.dll")
-            guard fileSystem.fileExists(at: d3d12DLL) else {
-                throw RuntimeInstallerError.installFailed("D3DMetal overlay verification failed: x64/d3d12.dll missing")
-            }
-
-            let frameworkBinary = paths.librariesDirectory.appending(path: "D3DMetal/D3DMetal.framework/Versions/A/D3DMetal")
-            guard fileSystem.fileExists(at: frameworkBinary) else {
-                throw RuntimeInstallerError.installFailed("D3DMetal overlay verification failed: framework binary missing")
-            }
+            try D3DMetalInstallation.verify(at: paths.librariesDirectory.appending(path: "D3DMetal"))
         case .zink:
-            let marker = paths.librariesDirectory.appending(path: "Zink/x64/opengl32.dll")
-            guard fileSystem.fileExists(at: marker) else {
-                throw RuntimeInstallerError.installFailed("Zink overlay verification failed: x64/opengl32.dll missing")
+            for architecture in ["x64", "x32"] {
+                for name in ["opengl32.dll", "libgallium_wgl.dll"] {
+                    let marker = paths.librariesDirectory.appending(path: "Zink/\(architecture)/\(name)")
+                    guard fileSystem.fileExists(at: marker) else {
+                        throw RuntimeInstallerError.installFailed("Zink overlay verification failed: \(architecture)/\(name) missing")
+                    }
+                }
             }
         }
-    }
-
-    private func downloadOverlay(from url: URL, fileName: String) async throws -> URL {
-        let destinationDirectory = FileManager.default.temporaryDirectory.appending(path: "ScotchOverlays")
-        if !fileSystem.fileExists(at: destinationDirectory) {
-            try fileSystem.createDirectory(at: destinationDirectory)
-        }
-        let destination = destinationDirectory.appending(path: fileName)
-
-        do {
-            let temporary = try await networkClient.download(from: NetworkRequest(url: url))
-            if fileSystem.fileExists(at: destination) {
-                try fileSystem.removeItem(at: destination)
-            }
-            try fileSystem.moveItem(at: temporary, to: destination)
-            return destination
-        } catch let NetworkClientError.nonSuccessStatus(_, status) {
-            throw RuntimeInstallerError.downloadFailed("Overlay \(fileName) returned \(status)")
-        } catch let networkError as NetworkClientError {
-            throw RuntimeInstallerError.downloadFailed("Overlay \(fileName): \(networkError.errorDescription ?? "unknown")")
-        } catch let runtimeError as RuntimeInstallerError {
-            throw runtimeError
-        } catch {
-            throw RuntimeInstallerError.downloadFailed("Overlay \(fileName): \(error.localizedDescription)")
-        }
-    }
-
-    private func resolveChecksumIfAvailable(
-        for assetName: String,
-        in releaseAssets: [GitHubReleaseResponse.Asset]
-    ) async -> String? {
-        guard let checksumAsset = findChecksumAsset(for: assetName, in: releaseAssets) else {
-            return nil
-        }
-
-        do {
-            let request = NetworkRequest(
-                url: checksumAsset.browserDownloadURL,
-                headers: ["Accept": "application/vnd.github+json"]
-            )
-            let data = try await networkClient.data(for: request)
-            guard let manifestText = String(data: data, encoding: .utf8) else {
-                logger.warning("Checksum fetch for \(assetName) returned non-UTF8 content")
-                return nil
-            }
-            if let parsed = SHA256Checksum.parse(manifestText, targetFileName: assetName) {
-                return parsed
-            }
-            logger.warning("Checksum manifest for \(assetName) did not include a SHA256 entry")
-            return nil
-        } catch {
-            logger.warning("Checksum fetch failed for \(assetName): \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    private func findChecksumAsset(
-        for assetName: String,
-        in releaseAssets: [GitHubReleaseResponse.Asset]
-    ) -> GitHubReleaseResponse.Asset? {
-        let normalizedAssetName = assetName.lowercased()
-        let explicitCandidates = [
-            "\(normalizedAssetName).sha256",
-            "\(normalizedAssetName).sha256sum",
-            "\(normalizedAssetName).sha256.txt",
-            "sha256sums",
-            "sha256sums.txt",
-            "sha256sum.txt",
-            "checksums",
-            "checksums.txt"
-        ]
-
-        if let exact = releaseAssets.first(where: { asset in
-            let candidate = asset.name.lowercased()
-            return explicitCandidates.contains(candidate)
-        }) {
-            return exact
-        }
-
-        return releaseAssets.first(where: { asset in
-            let candidate = asset.name.lowercased()
-            return candidate.contains("sha256") || candidate.contains("checksum")
-        })
     }
 
     private func verifyChecksum(_ expected: String, for fileURL: URL, assetName: String) throws {
@@ -633,7 +735,7 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: outputURL.path(percentEncoded: false))
     }
 
-    private var wineLauncherScript: String {
+    private func wineLauncherScript(engineDirectory: String) -> String {
         """
         #!/bin/bash
         HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -644,18 +746,17 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
           . "$SCOTCH_LAUNCH_ENV"
           set +a
         fi
-        if [ -d "$LIBS/D3DMetal" ]; then
-          export DYLD_FRAMEWORK_PATH="$LIBS/D3DMetal${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
-          export DYLD_LIBRARY_PATH="$LIBS/D3DMetal${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        if [ -n "${SCOTCH_LAUNCH_CWD:-}" ]; then
+          cd -- "$SCOTCH_LAUNCH_CWD" || exit 1
         fi
         if [ -n "${SCOTCH_GPU_SPOOF_LIB:-}" ] && [ -f "$SCOTCH_GPU_SPOOF_LIB" ]; then
           export CX_LIBVULKAN="$SCOTCH_GPU_SPOOF_LIB"
-          export SCOTCH_REAL_MOLTENVK_PATH="${SCOTCH_REAL_MOLTENVK_PATH:-$LIBS/Wine/lib/libMoltenVK.dylib}"
+          export SCOTCH_REAL_MOLTENVK_PATH="${SCOTCH_REAL_MOLTENVK_PATH:-$LIBS/\(engineDirectory)/lib/libMoltenVK.dylib}"
           export DYLD_LIBRARY_PATH="$(dirname "$SCOTCH_GPU_SPOOF_LIB")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
         fi
-        export PATH="$LIBS/Wine/bin:${PATH:-/usr/bin:/bin}"
-        export WINE="${WINE:-$LIBS/Wine/bin/wine}"
-        exec "$LIBS/Wine/bin/wine" "$@"
+        export PATH="$LIBS/\(engineDirectory)/bin:${PATH:-/usr/bin:/bin}"
+        export WINE="${WINE:-$LIBS/\(engineDirectory)/bin/wine}"
+        exec "$LIBS/\(engineDirectory)/bin/wine" "$@"
         """
     }
 
@@ -671,11 +772,8 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
 
     private func cleanupTransientInstallFiles() {
         let transients = [
-            FileManager.default.temporaryDirectory.appending(path: "ScotchRuntimeDownloads"),
-            FileManager.default.temporaryDirectory.appending(path: "ScotchOverlays"),
-            paths.applicationSupportDirectory.appending(path: "wine-scratch"),
-            paths.applicationSupportDirectory.appending(path: "dxvk-scratch"),
-            paths.applicationSupportDirectory.appending(path: "dxmt-scratch")
+            downloadsRoot,
+            scratchRoot
         ]
         for url in transients where fileSystem.fileExists(at: url) {
             try? fileSystem.removeItem(at: url)
@@ -720,10 +818,6 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             paths.wineBundleURL,
             paths.librariesDirectory.appending(path: "DXVK"),
             paths.librariesDirectory.appending(path: "DXMT"),
-            paths.librariesDirectory.appending(path: "Wine/lib/wine/x86_64-unix/winemac.so"),
-            paths.librariesDirectory.appending(path: "D3DMetal/x64/d3d12.dll"),
-            paths.librariesDirectory.appending(path: "D3DMetal/D3DMetal.framework/Versions/A/D3DMetal"),
-            paths.librariesDirectory.appending(path: "Zink/x64/opengl32.dll"),
             paths.librariesDirectory.appending(path: "VulkanSpoof/libscotch_gpu_spoof.dylib")
         ]
 
@@ -732,8 +826,16 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         }
 
         try verifyOverlayInstall(component: .winemacOpenGLPatch)
-        try verifyOverlayInstall(component: .d3dmetal)
         try verifyOverlayInstall(component: .zink)
+        if approvedRuntime != nil {
+            try MetalEngineInstallation.verify(in: paths.librariesDirectory)
+            try MetalEngineInstallation.verifyDXMT(in: paths.librariesDirectory)
+            try GraphicsSupportInstallation.verify(in: paths.librariesDirectory)
+            for component in ["DXVK", "Zink"] {
+                try PackageArchitecture.windowsDLLs(in: paths.librariesDirectory.appending(path: component + "/x64"), machine: 0x8664)
+                try PackageArchitecture.windowsDLLs(in: paths.librariesDirectory.appending(path: component + "/x32"), machine: 0x014c)
+            }
+        }
     }
 
     private func validateManifest(_ manifest: RuntimeManifest) throws {
@@ -742,27 +844,11 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
         }
         let overlays = [
             manifest.winemacPatchVersion,
-            manifest.d3dmetalVersion,
             manifest.zinkVersion
         ]
         if overlays.contains(where: { ($0 ?? "").isEmpty }) {
             throw RuntimeInstallerError.installFailed("Manifest sanity check failed: missing required overlay versions")
         }
-    }
-
-    private func hasRequiredRuntimeArtifacts() -> Bool {
-        let requiredPaths = [
-            paths.wineBinaryURL,
-            paths.wineBundleURL,
-            paths.librariesDirectory.appending(path: "DXVK"),
-            paths.librariesDirectory.appending(path: "DXMT"),
-            paths.librariesDirectory.appending(path: "Wine/lib/wine/x86_64-unix/winemac.so"),
-            paths.librariesDirectory.appending(path: "D3DMetal/x64/d3d12.dll"),
-            paths.librariesDirectory.appending(path: "D3DMetal/D3DMetal.framework/Versions/A/D3DMetal"),
-            paths.librariesDirectory.appending(path: "Zink/x64/opengl32.dll"),
-            paths.librariesDirectory.appending(path: "VulkanSpoof/libscotch_gpu_spoof.dylib")
-        ]
-        return requiredPaths.allSatisfy { fileSystem.fileExists(at: $0) }
     }
 }
 

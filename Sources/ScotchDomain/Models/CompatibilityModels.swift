@@ -16,7 +16,7 @@ public enum TranslationBackend: String, Codable, CaseIterable, Sendable {
         case .d3dmetal:
             "D3DMetal (DX11/12)"
         case .zink:
-            "Zink (OpenGL 4.6)"
+            "Zink (OpenGL)"
         case .none:
             "None"
         }
@@ -25,11 +25,11 @@ public enum TranslationBackend: String, Codable, CaseIterable, Sendable {
     public var wineDLLOverrides: String? {
         switch self {
         case .dxvk:
-            "d3d10core,d3d11=n,b"
+            "d3d10core,d3d11=n"
         case .dxmt:
-            "dxgi,d3d10core,d3d11,winemetal=n,b"
+            "dxgi,d3d10core,d3d11,winemetal=b"
         case .d3dmetal:
-            "dxgi,d3d11,d3d12=n,b"
+            "dxgi,d3d11,d3d12=b"
         case .zink:
             "opengl32,libgallium_wgl,libglapi=n,b"
         case .none:

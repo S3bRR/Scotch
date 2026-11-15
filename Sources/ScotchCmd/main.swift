@@ -31,6 +31,14 @@ struct ScotchCommandLine {
         }
 
         switch command {
+        case "run-configured-path":
+            guard arguments.count >= 3, let bottle = loadBottle(at: URL(fileURLWithPath: arguments[1])) else { return fail("Missing bottle or executable path.") }
+            let executable = URL(fileURLWithPath: arguments[2])
+            do {
+                let settings = try ProgramSettingsFiles.load(for: executable, in: bottle.directoryURL)
+                try await makeServices().runtimeService.runProgram(at: executable, arguments: settings.parsedArguments() + Array(arguments.dropFirst(3)), bottle: bottle, extraEnvironment: settings.effectiveEnvironment())
+                return 0
+            } catch { return fail("Configured launch failed: \(error.localizedDescription)") }
         case "list":
             return listBottles()
         case "create":
@@ -232,7 +240,7 @@ struct ScotchCommandLine {
             return fail("Bottle '\(bottleName)' not found.")
         }
 
-        let assembler = EnvironmentAssembler(paths: paths)
+        let assembler = EnvironmentAssembler(paths: paths.forBottle(bottle))
         let environment = assembler.makeShellEnvironment(bottle: bottle)
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
             guard key.isShellEnvironmentKey else { continue }
@@ -403,6 +411,9 @@ struct ScotchCommandLine {
             print("Installed Wine \(manifest.wineVersion), DXVK \(manifest.dxvkVersion), DXMT \(manifest.dxmtVersion)")
             for overlay in overlays {
                 print("Overlay \(overlay.component.displayName): \(overlay.installedVersion ?? "missing")")
+                if let warning = overlay.errorMessage {
+                    print("Warning: \(overlay.component.displayName): \(warning)")
+                }
             }
             return 0
         } catch {
@@ -513,6 +524,7 @@ struct ScotchCommandLine {
               ScotchCmd shellenv <bottle-name>
               ScotchCmd run <bottle-name> <exe-path> [args...]
               ScotchCmd run-path <bottle-path> <exe-path> [args...]
+              ScotchCmd run-configured-path <bottle-path> <exe-path> [extra-args...]
               ScotchCmd prepare-path <bottle-path>
             """
         )

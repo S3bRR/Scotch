@@ -11,9 +11,9 @@ public struct SetupSheetView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: ScotchTheme.Spacing.large) {
             VStack(alignment: .leading, spacing: ScotchTheme.Spacing.xSmall) {
-                Text("Scotch Setup")
+                Text(viewModel.runtimeManifest == nil ? "Scotch Setup" : "Repair Runtime")
                     .font(.title2.weight(.semibold))
-                Text("Rosetta, Wine Staging 11.16, and translation backends are required before creating or launching bottles.")
+                Text("Install Rosetta, Wine Staging 11.16, and translation backends. D3DMetal is optional; Zink, DXVK, and DXMT can run without it.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -83,7 +83,7 @@ public struct SetupSheetView: View {
             HStack(spacing: ScotchTheme.Spacing.small) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Resolving latest runtime releases...")
+                Text("Resolving supported runtime packages...")
             }
         case .downloadingRuntime(let fraction):
             VStack(alignment: .leading, spacing: ScotchTheme.Spacing.xSmall) {
@@ -120,6 +120,7 @@ public struct SetupSheetView: View {
     }
 
     private var canDismiss: Bool {
+        if viewModel.runtimeManifest != nil { return !installButtonDisabled }
         switch viewModel.setupStage {
         case .ready: return true
         default: return false

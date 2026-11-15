@@ -78,6 +78,7 @@ public struct OverlayInstallResult: Equatable, Sendable {
 public struct RuntimeManifest: Codable, Equatable, Sendable {
     public static let fileName = "ScotchRuntimeManifest.plist"
 
+    public var runtimeSetID: String?
     public var schemaVersion: Int
     public var wineVersion: String
     public var dxvkVersion: String
@@ -88,6 +89,7 @@ public struct RuntimeManifest: Codable, Equatable, Sendable {
 
     public init(
         schemaVersion: Int = 1,
+        runtimeSetID: String? = nil,
         wineVersion: String,
         dxvkVersion: String,
         dxmtVersion: String,
@@ -95,6 +97,7 @@ public struct RuntimeManifest: Codable, Equatable, Sendable {
         winemacPatchVersion: String? = nil,
         zinkVersion: String? = nil
     ) {
+        self.runtimeSetID = runtimeSetID
         self.schemaVersion = schemaVersion
         self.wineVersion = wineVersion
         self.dxvkVersion = dxvkVersion

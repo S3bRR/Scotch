@@ -1,3 +1,5 @@
+// Legacy migration reference only. New Scotch versions do not install this shim;
+// SteamLaunchPolicy uses the client's own rendering switches instead.
 // Scotch steamwebhelper launcher.
 //
 // Wine 11 on Apple Silicon fails to present frames that Chromium hands between

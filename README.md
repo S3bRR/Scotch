@@ -16,6 +16,14 @@ This is a personal project. Use at your own risk.
 
 Scotch will download Wine, DXVK, DXMT, and the other backends automatically on first run (~500 MB).
 
+## Updating Scotch
+
+Use **Update** in the main window or app menu. One flow checks Scotch and approved Wine/graphics updates, reports what is changing, and installs eligible updates. App replacement preserves bottles, saves, settings, and custom locations. Existing bottles stay on their working runtime; newly created bottles use the updated default. **Bottle Runtime** can switch an existing bottle after taking a recoverable snapshot.
+
+Users upgrading from a build without the updater must replace Scotch.app manually once. Quit Scotch, drag the new app into Applications, and replace the old app. Keep Application Support and custom bottle folders in place. Do not run Uninstall as an update step.
+
+The updater-enabled build on this branch is a local test candidate. Its public signed feeds must be deployed after release approval before online updates are available. See [the update maintenance guide](Docs/updates.md).
+
 ## Uninstall
 
 Settings → Uninstall Scotch removes everything Scotch created:
@@ -48,11 +56,11 @@ Each translation backend is a separate option in the bottle config picker. You p
 
 ## Features
 
-- **DXVK / DXMT / D3DMetal / Zink** translation backends, selectable per bottle.
+- **DXVK / DXMT / D3DMetal / Zink** translation backends, with per-application detection, conservative Auto selection, manual overrides and remembered working choices. See [automatic backends](Docs/automatic-backends.md).
 - **GPU identity spoofing**: Four-layer spoof so games detect a known NVIDIA/AMD GPU instead of Apple Silicon (vendor `0x106b`). Combines a Vulkan shim that patches `vkGetPhysicalDeviceProperties` at runtime, `dxvk.conf` generation, Wine Direct3D registry keys, and MoltenVK compatibility vars. Preset picker with AMD RX 7900 XTX, RX 6800 XT, NVIDIA RTX 4090, RTX 3080, Custom, and Off.
-- **Additive Zink toggle** for titles that need OpenGL 4.6.
+- **Additive Zink support** alongside DXVK, DXMT, or D3DMetal, using per-instance Vulkan driver routing.
 - **Winetricks** integrated as a sheet; first-run `corefonts` bootstrap (a failed font download no longer discards the new bottle).
-- **Steam** one-click install and launch. Scotch wraps Steam's web helper so its UI renders in a single process — Wine 11 on Apple Silicon otherwise shows Steam as a black window. The wrap is reapplied automatically after Steam updates.
+- **Steam** one-click install and launch. Scotch waits for setup to finish and supplies native cross-process UI compatibility with GPU compositing enabled. Valve's web-helper executables remain intact, and games retain the bottle's selected graphics backend.
 - **Bottle health check**: new bottles are checked for working 32-bit (WoW64) support and repaired once before setup continues, with a clear error if Wine still can't run 32-bit programs.
 - **Progress feedback**: spinners while a bottle is being created and while a pinned game is starting.
 - **Diagnostics screen** with live process list, log browser, and effective-environment preview.
@@ -77,8 +85,8 @@ Each translation backend is a separate option in the bottle config picker. You p
 | Wine | 11.16 | Gcenx/macOS_Wine_builds |
 | DXVK | 1.10.3 | Gcenx/DXVK-macOS (latest macOS-capable build) |
 | DXMT | 0.80 | 3Shain/dxmt (latest) |
-| D3DMetal | 3.0 | Apple GPTK 3 (Scotch overlay; GPTK 3.0-3 is still D3DMetal 3.0) |
-| Mesa Zink | 26.2.0 | pal1000/mesa-dist-win, repackaged as Scotch `zink-2.0` |
+| D3DMetal | 3.0 | GPTK 3.0-3 payload + matched WineForge 0.6.0.3 / Wine 11.16 loader |
+| Mesa Zink | 26.2.0 | pal1000/mesa-dist-win MSVC release, verified with a pinned SHA256 |
 | MoltenVK | 1.4.0 | Bundled inside Gcenx Wine 11.16 |
 | macOS | 26 – 27.0.1 | Tahoe minimum; working on 27.0.1 Golden Gate. Apple Silicon only |
 
@@ -89,22 +97,24 @@ Other combinations may work but are unsupported.
 ## How it works
 
 1. On first run, Scotch downloads pinned Wine Staging 11.16, DXVK 1.10.3, and DXMT 0.80 from their upstream GitHub releases. Gcenx's 11.16 build is configured `--without-opengl`; OpenGL titles use Mesa Zink instead of Apple's CGL.
-2. It downloads Scotch-hosted overlays on top of that:
-   - Apple's D3DMetal 3.0 framework (redistributed from GPTK 3 for DX11/12 support).
-   - Mesa Zink 26.2.0 for OpenGL-over-Vulkan.
+2. It installs the graphics overlays:
+   - Apple's D3DMetal 3.0 from Gcenx's pinned GPTK 3.0-3 archive, together with a pinned WineForge 0.6.0.3 / Wine 11.16 loader. Both downloads have exact size and SHA256 checks. Stock Wine cannot load Apple's shims. Build 14 uses the matched engine for every backend, including Steam's cross-process UI compatibility. The original Gcenx archive is retained for repair provenance. The old missing Scotch overlay URL is no longer used. Network failures still preserve usable backends.
+   - Mesa Zink 26.2.0 directly from [pal1000's upstream release](https://github.com/pal1000/mesa-dist-win/releases/tag/26.2.0), with a pinned SHA256. Scotch installs the OpenGL DLLs and their Gallium dependency for both 64-bit and 32-bit Windows applications.
    - Stock `winemac.so` from Wine 11.16 is used as-is. The old 11.6 OpenGL byte patch is not applied (it is ABI-specific to that build).
 3. It builds, ad-hoc signs, and verifies a `Wine.app` launcher bundle so Wine's child processes get a proper macOS foreground activation policy — without this, Wine's windows are created invisible offscreen. Before launching, it verifies the wrapper and repairs unsigned or modified wrappers from earlier installs.
 4. When you create a bottle, Scotch creates a Wine prefix with `wineboot --init`, checks that 32-bit (WoW64) programs can run (repairing with `wineboot -u` once if not), then runs `winecfg` for the selected Windows version, then winetricks corefonts.
-5. When you run an `.exe`, Scotch copies the backend-specific DLLs (DXVK / DXMT / D3DMetal / Zink) into the bottle's `system32` and `syswow64`, sets the right `WINEDLLOVERRIDES`, and launches Wine via `open -a Wine.app --env …` so the bottle's `WINEPREFIX` actually reaches the Wine process.
+5. When you run an `.exe`, Scotch selects the matching engine, installs native DXVK/Zink DLLs or resolves builtin DXMT/D3DMetal modules, sets `WINEDLLOVERRIDES`, and launches via `open -n -a Wine.app --env …` so the selected bottle and graphics environment reach Wine. Engine changes create a complete prefix recovery snapshot first.
 
 All Scotch data lives under `~/Library/Application Support/com.s3brr.Scotch/` (runtime, bottles, settings, logs, winetricks cache). Older installs that used `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` are migrated on launch and removed by Uninstall.
+
+If setup in Scotch 1.2.3 fails with `Overlay d3dmetal-3.0.tar.gz returned 404`, install a build containing this repair. Build 12's single **Update** action checks both Scotch and its approved runtimes, repairs the complete graphics stack, names the components, and clears its repair notice after success. It preserves bottles, saves, settings, and external bottle locations. The bundled native profile pairs MoltenVK 1.4.2 with DXVK and a private KosmicKrisp build with Zink. Zink tests on an M5 Pro/macOS 27.2.1 report real OpenGL 4.6 and pass OpenGL 4.5 compute/DSA, transform feedback, GPU readback and presentation in 32/64-bit processes. Game compatibility and other Mac models still need testing; see [the investigation](Docs/d3dmetal-repair.md). Installing system Mesa or Vulkan does not replace Scotch's private runtime.
 
 ## Not supported
 
 - **Anti-cheat games** (Easy Anti-Cheat, BattlEye, Vanguard, Ricochet). These look for specific kernel hooks that don't exist on Wine. No translation layer fixes them.
 - **Intel Macs**. Scotch targets Apple Silicon exclusively.
 - **macOS older than 26**. The deployment target is Tahoe; some code paths depend on Tahoe-era frameworks.
-- **Auto-updates**. Not wired up.
+- Runtime combinations outside the approved update feed are not installed automatically.
 
 ## Credits and thanks
 
@@ -125,7 +135,7 @@ The entire Windows compatibility layer is [Wine](https://www.winehq.org/). Two d
 - **Apple** for the [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/), D3DMetal, and the Metal framework itself. D3DMetal 3.0 is redistributed here under the terms of Apple's GPTK Beta License; removal on request.
 - **The [Mesa 3D](https://www.mesa3d.org/) project** and its contributors for Gallium, the Zink driver, and the OpenGL 4.6 implementation.
 - **[pal1000](https://github.com/pal1000)** for [mesa-dist-win](https://github.com/pal1000/mesa-dist-win), the Windows builds of Mesa that make Zink usable from a Wine prefix.
-- **[KhronosGroup](https://github.com/KhronosGroup)** for MoltenVK, the Vulkan-over-Metal shim that underpins both DXVK and Zink on Apple Silicon.
+- **[KhronosGroup](https://github.com/KhronosGroup)** for MoltenVK, MoltenVK, used by DXVK. Mesa KosmicKrisp supplies the Vulkan-over-Metal path for Zink in the repaired profile.
 - **[Moonshine](https://github.com/ybmeng/moonshine)** for figuring out the `winemac.so` OpenGL patch approach that Scotch's overlay is derived from.
 
 ### Other dependencies
@@ -143,3 +153,7 @@ Scotch is [GPL-3.0](./LICENSE), inherited from Wine. All included third-party co
 - `LICENSE` — the GPL-3 that covers Scotch's Swift source
 - Wine, DXVK, DXMT, Mesa, Zink — each under their respective upstream licenses
 - D3DMetal — Apple's GPTK Beta License (redistributed; removal on request)
+
+New bottles default to Auto in the main Backend picker. Per-application manual
+overrides remain available in Program Settings; existing bottle choices are
+preserved. See [automatic backends](Docs/automatic-backends.md).

@@ -12,6 +12,8 @@ public struct BottleDetailView: View {
     @State private var renamingProgram: ProgramRecord?
     @State private var renameText: String = ""
     @State private var showWinetricks = false
+    @State private var showRuntimeSettings = false
+    @State private var savingBackend = false
     @State private var showAdvancedConfig = false
     @State private var navigationPath = NavigationPath()
 
@@ -44,7 +46,7 @@ public struct BottleDetailView: View {
                         .padding(.bottom, 72)
                         .task(id: status) {
                             try? await Task.sleep(for: .seconds(5))
-                            if viewModel.statusMessage == status {
+                            if viewModel.statusMessage == status && !viewModel.isInstallingSteam {
                                 viewModel.statusMessage = nil
                             }
                         }
@@ -73,6 +75,13 @@ public struct BottleDetailView: View {
                     }
                     .help("Diagnostics")
 
+                    Button { showRuntimeSettings = true } label: {
+                        Label("Bottle Runtime…", systemImage: "cpu")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Bottle Runtime…")
+                    .disabled(viewModel.isInstallingSteam)
+
                     Spacer()
                     if viewModel.steamInstalled {
                         Button {
@@ -80,6 +89,7 @@ public struct BottleDetailView: View {
                         } label: {
                             Label("Launch Steam", systemImage: "gamecontroller.fill")
                         }
+                        .disabled(viewModel.isInstallingSteam)
                     } else {
                         Button {
                             Task { await viewModel.installSteam() }
@@ -156,13 +166,15 @@ public struct BottleDetailView: View {
                     ProgramSettingsView(
                         program: program,
                         onSave: { updatedSettings in
-                            Task { await viewModel.saveProgramSettings(updatedSettings, for: program) }
+                            await viewModel.saveProgramSettings(updatedSettings, for: program)
                         },
                         onRun: { updatedSettings in
                             var stagedProgram = program
                             stagedProgram.settings = updatedSettings
-                            Task { await viewModel.runProgram(stagedProgram) }
-                        }
+                            await viewModel.runProgram(stagedProgram)
+                        },
+                        onRecommend: { settings in await viewModel.graphicsRecommendation(for: program, settings: settings) },
+                        onRememberWorking: { settings in try await viewModel.rememberWorkingGraphics(for: program, settings: settings) }
                     )
                 }
             }
@@ -183,6 +195,7 @@ public struct BottleDetailView: View {
                 }
             )
         }
+        .sheet(isPresented: $showRuntimeSettings) { BottleRuntimeSheet(container: container, viewModel: viewModel) }
         .sheet(isPresented: $showWinetricks) {
             WinetricksSheetView(container: container, bottle: viewModel.bottle)
         }
@@ -246,15 +259,15 @@ public struct BottleDetailView: View {
             .padding(.horizontal, 4)
 
             HStack(spacing: ScotchTheme.Spacing.small) {
-                Image(systemName: backendIcon(for: viewModel.bottle.settings.backend.backend))
+                Image(systemName: viewModel.bottle.settings.backend.automatic ? "wand.and.stars" : backendIcon(for: viewModel.bottle.settings.backend.backend))
                     .font(.title2)
                     .foregroundStyle(ScotchTheme.accent)
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(viewModel.bottle.settings.backend.backend.displayName)
+                    Text(viewModel.bottle.settings.backend.automatic ? "Auto" : viewModel.bottle.settings.backend.backend.displayName)
                         .font(.body.weight(.medium))
-                    Text(backendDescription(for: viewModel.bottle.settings.backend.backend))
+                    Text(viewModel.bottle.settings.backend.automatic ? "Chooses per application · Current: \(viewModel.bottle.settings.backend.backend.displayName)" : backendDescription(for: viewModel.bottle.settings.backend.backend))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -262,21 +275,38 @@ public struct BottleDetailView: View {
 
                 Spacer()
 
-                Picker("", selection: $viewModel.bottle.settings.backend.backend) {
+                Picker("Backend", selection: backendSelection) {
+                    Text("Auto").tag(Optional<TranslationBackend>.none)
                     ForEach(availableBackends, id: \.self) { backend in
-                        Text(backend.displayName).tag(backend)
+                        Text(backend.displayName).tag(Optional(backend))
                     }
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .disabled(viewModel.isInstallingSteam || savingBackend)
                 .frame(maxWidth: 220)
-                .onChange(of: viewModel.bottle.settings.backend.backend) { _, _ in
-                    saveSettings()
-                }
             }
             .padding(ScotchTheme.Spacing.medium)
             .scotchGlassCard(cornerRadius: 14)
         }
+    }
+
+    private var backendSelection: Binding<TranslationBackend?> {
+        Binding(
+            get: { viewModel.bottle.settings.backend.automatic ? nil : viewModel.bottle.settings.backend.backend },
+            set: { selected in
+                guard !savingBackend else { return }
+                savingBackend = true
+                var settings = viewModel.bottle.settings
+                settings.backend.automatic = selected == nil
+                if let selected { settings.backend.backend = selected }
+                Task {
+                    defer { savingBackend = false }
+                    await viewModel.saveSettings(settings)
+                    await viewModel.refresh()
+                }
+            }
+        )
     }
 
     // MARK: - Navigation cards
@@ -370,9 +400,9 @@ public struct BottleDetailView: View {
 
     private func backendDescription(for backend: TranslationBackend) -> String {
         switch backend {
-        case .dxvk: "DirectX 9/10/11 via Vulkan"
+        case .dxvk: "DirectX 10/11 via Vulkan"
         case .dxmt: "DirectX 10/11 native Metal"
-        case .d3dmetal: "Apple Game Porting Toolkit"
+        case .d3dmetal: "64-bit DirectX 11/12 via Metal"
         case .zink: "OpenGL via Vulkan"
         case .none: "No translation"
         }
@@ -389,16 +419,10 @@ public struct BottleDetailView: View {
     private func isBackendAvailable(_ backend: TranslationBackend) -> Bool {
         switch backend {
         case .d3dmetal:
-            let d3d12Path = container.paths.librariesDirectory
-                .appending(path: "D3DMetal/x64/d3d12.dll")
-                .path(percentEncoded: false)
-            let frameworkPath = container.paths.librariesDirectory
-                .appending(path: "D3DMetal/D3DMetal.framework/Versions/A/D3DMetal")
-                .path(percentEncoded: false)
-            return FileManager.default.fileExists(atPath: d3d12Path) && FileManager.default.fileExists(atPath: frameworkPath)
+            return D3DMetalInstallation.isInstalled(at: container.paths.forBottle(viewModel.bottle).librariesDirectory.appending(path: "D3DMetal"))
         case .zink:
             return FileManager.default.fileExists(
-                atPath: container.paths.librariesDirectory
+                atPath: container.paths.forBottle(viewModel.bottle).librariesDirectory
                     .appending(path: "Zink/x64/opengl32.dll")
                     .path(percentEncoded: false)
             )

@@ -1,75 +1,46 @@
 import Foundation
 
-/// Keeps Steam's UI from rendering as a black window under Wine 11 on Apple Silicon.
-///
-/// Steam's `steamwebhelper.exe` (Chromium) presents frames across processes, which
-/// Wine's macOS driver drops. We swap it for a tiny launcher that starts the real
-/// helper (renamed `steamwebhelper_real.exe`) with `--disable-gpu --single-process`.
-/// Steam's startup check compares file sizes only, so the launcher is zero-padded
-/// to the real helper's size; when a Steam update replaces the helper, the next
-/// launch from Scotch wraps the new one.
+/// Migration for the old padded Steam CEF launcher. Bootstrap and updates can
+/// replace its helper after our launch check, so use Steam's own client flags.
+/// Keep the bundled old launcher only to recognize and recover our own files.
 struct SteamWebHelperLauncher: Sendable {
-    enum Outcome: Equatable, Sendable {
-        /// Steam isn't installed there, or has no 64-bit web helper.
-        case notApplicable
-        case alreadyInstalled
-        /// Files changed; a running Steam must restart to pick them up.
-        case installed
-    }
-
-    static let helperName = "steamwebhelper.exe"
-    static let realHelperName = "steamwebhelper_real.exe"
-
     let launcher: Data
 
     static func bundled() -> SteamWebHelperLauncher? {
         guard let url = RuntimeResources.bundled.url(
             forResource: "steamwebhelper_launcher", withExtension: "exe", subdirectory: "SteamWebHelper"
-        ), let data = try? Data(contentsOf: url), !data.isEmpty else {
-            return nil
-        }
+        ), let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
         return SteamWebHelperLauncher(launcher: data)
     }
 
-    func ensureInstalled(steamDirectory: URL) throws -> Outcome {
-        let cefDirectory = steamDirectory.appending(path: "bin/cef/cef.win64")
-        let helper = cefDirectory.appending(path: Self.helperName)
-        let real = cefDirectory.appending(path: Self.realHelperName)
-        let fileManager = FileManager.default
+    private func helper(in steamDirectory: URL) -> URL {
+        steamDirectory.appending(path: "bin/cef/cef.win64/steamwebhelper.exe")
+    }
 
-        guard fileManager.fileExists(atPath: helper.path) else {
-            return .notApplicable
-        }
+    func needsRestoration(steamDirectory: URL) throws -> Bool {
+        let file = helper(in: steamDirectory)
+        guard FileManager.default.fileExists(atPath: file.path) else { return false }
+        return try Data(contentsOf: file, options: .mappedIfSafe).starts(with: launcher)
+    }
 
-        let current = try Data(contentsOf: helper, options: .mappedIfSafe)
-        if current.starts(with: launcher) {
-            if fileManager.fileExists(atPath: real.path) {
-                return .alreadyInstalled
+    func restoreOriginalIfNeeded(steamDirectory: URL) throws {
+        guard try needsRestoration(steamDirectory: steamDirectory) else { return }
+        let file = helper(in: steamDirectory)
+        let original = file.deletingLastPathComponent().appending(path: "steamwebhelper_real.exe")
+        let fm = FileManager.default
+        if fm.fileExists(atPath: original.path) {
+            let data = try Data(contentsOf: original, options: .mappedIfSafe)
+            guard data.starts(with: [0x4d, 0x5a]), !data.starts(with: launcher) else {
+                throw CocoaError(.fileReadCorruptFile)
             }
-            // Launcher with nothing to launch: remove it so Steam's own
-            // verification restores the real helper on its next start.
-            try fileManager.removeItem(at: helper)
-            return .notApplicable
+            // Atomic replacement; retain the original backup for recovery.
+            try data.write(to: file, options: .atomic)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        } else {
+            // Missing vendor executable makes Steam's own bootstrapper restore
+            // it. Retain the obsolete shim instead of destroying the only copy.
+            let backup = file.deletingLastPathComponent().appending(path: "steamwebhelper-scotch-legacy-\(UUID().uuidString).exe")
+            try fm.moveItem(at: file, to: backup)
         }
-
-        // `helper` is Steam's real binary (fresh install or updated by Steam).
-        if fileManager.fileExists(atPath: real.path) {
-            try fileManager.removeItem(at: real)
-        }
-        try fileManager.moveItem(at: helper, to: real)
-
-        var replacement = launcher
-        if current.count > replacement.count {
-            replacement.append(Data(count: current.count - replacement.count))
-        }
-        do {
-            try replacement.write(to: helper)
-            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
-        } catch {
-            try? fileManager.removeItem(at: helper)
-            try? fileManager.moveItem(at: real, to: helper)
-            throw error
-        }
-        return .installed
     }
 }
