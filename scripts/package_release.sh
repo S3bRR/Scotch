@@ -73,10 +73,15 @@ mkdir -p "$THUMBNAIL_APPEX/Contents/MacOS"
 cp "$THUMBNAIL_BIN" "$THUMBNAIL_APPEX/Contents/MacOS/ScotchThumbnail"
 cp "$ROOT_DIR/Sources/ScotchThumbnail/Info.plist" "$THUMBNAIL_APPEX/Contents/Info.plist"
 
-for bundle in "$ROOT_DIR"/.build/release/*.bundle; do
-  if [[ -e "$bundle" ]]; then
-    cp -R "$bundle" "$APP_BUNDLE/Contents/Resources/"
-  fi
+# Stage the resources used by this release, not any stale build products.
+ditto "$ROOT_DIR/.build/release/Scotch_ScotchRuntime.bundle" \
+  "$APP_BUNDLE/Contents/Resources/Scotch_ScotchRuntime.bundle"
+
+# Strip the packaged copies only; retain local build symbols for debugging.
+for executable in "$APP_BUNDLE/Contents/MacOS/ScotchApp" \
+                  "$APP_BUNDLE/Contents/MacOS/ScotchCmd" \
+                  "$THUMBNAIL_APPEX/Contents/MacOS/ScotchThumbnail"; do
+  xcrun strip -S -x "$executable"
 done
 
 find "$APP_BUNDLE/Contents/Resources" -name cabextract -exec chmod +x {} \;
@@ -105,7 +110,21 @@ fi
 SPARKLE_FRAMEWORK="$ROOT_DIR/.build/release/Sparkle.framework"
 [[ -d "$SPARKLE_FRAMEWORK" ]] || { echo "Missing Sparkle framework"; exit 1; }
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
-ditto "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+SPARKLE_DEST="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+ditto "$SPARKLE_FRAMEWORK" "$SPARKLE_DEST"
+# The macOS app is Apple Silicon only. Keep Wine's separate Intel resources.
+rm -rf "$SPARKLE_DEST/Headers" "$SPARKLE_DEST/Modules" \
+       "$SPARKLE_DEST/Versions/Current/Headers" "$SPARKLE_DEST/Versions/Current/Modules"
+while IFS= read -r -d '' framework_file; do
+  if file -b "$framework_file" | grep -q "Mach-O"; then
+    arches="$(xcrun lipo -archs "$framework_file")"
+    if [[ "$arches" != arm64 ]]; then
+      xcrun lipo "$framework_file" -thin arm64 -output "$framework_file.arm64"
+      chmod "$(stat -f '%Lp' "$framework_file")" "$framework_file.arm64"
+      mv -f "$framework_file.arm64" "$framework_file"
+    fi
+  fi
+done < <(find "$SPARKLE_DEST" -type f -print0)
 
 if command -v codesign >/dev/null 2>&1; then
   CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
@@ -163,16 +182,21 @@ if command -v hdiutil >/dev/null 2>&1; then
   cp -R "$APP_BUNDLE" "$STAGING/"
   ln -s /Applications "$STAGING/Applications"
 
-  hdiutil create \
-    -srcfolder "$STAGING" \
-    -volname "$VOLUME_NAME" \
-    -fs HFS+ \
-    -format UDRW \
-    -ov \
-    "$RW_DMG" >/dev/null
+  if [[ "${SCOTCH_DMG_STYLE:-finder}" == plain ]]; then
+    # Headless builds still get the app and Applications shortcut.
+    hdiutil create -srcfolder "$STAGING" -volname "$VOLUME_NAME" -fs HFS+ \
+      -format UDZO -imagekey zlib-level=9 -ov "$DMG_PATH" >/dev/null
+  else
+    hdiutil create \
+      -srcfolder "$STAGING" \
+      -volname "$VOLUME_NAME" \
+      -fs HFS+ \
+      -format UDRW \
+      -ov \
+      "$RW_DMG" >/dev/null
 
-  hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen -plist > "$OUT_DIR/mount.plist"
-  MOUNT_DIR="$(python3 - "$OUT_DIR/mount.plist" <<'PYMOUNT'
+    hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen -plist > "$OUT_DIR/mount.plist"
+    MOUNT_DIR="$(python3 - "$OUT_DIR/mount.plist" <<'PYMOUNT'
 import plistlib, sys
 with open(sys.argv[1], 'rb') as source:
     image = plistlib.load(source)
@@ -180,10 +204,10 @@ print(next(entity['mount-point'] for entity in image['system-entities'] if 'moun
 PYMOUNT
 )"
 
-  # Give Finder a moment to index the mounted volume before scripting it.
-  sleep 2
+    # Give Finder a moment to index the mounted volume before scripting it.
+    sleep 2
 
-  osascript <<OSA
+    osascript <<OSA
 tell application "Finder"
   set targetDisk to disk of (POSIX file "$MOUNT_DIR" as alias)
   tell targetDisk
@@ -207,13 +231,14 @@ tell application "Finder"
 end tell
 OSA
 
-  sync
-  hdiutil detach "$MOUNT_DIR" >/dev/null
-  rmdir "$MOUNT_DIR" 2>/dev/null || true
-  MOUNT_DIR=""
+    sync
+    hdiutil detach "$MOUNT_DIR" >/dev/null
+    rmdir "$MOUNT_DIR" 2>/dev/null || true
+    MOUNT_DIR=""
 
-  hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" >/dev/null
-  rm -f "$RW_DMG"
+    hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" >/dev/null
+    rm -f "$RW_DMG"
+  fi
   rm -rf "$STAGING"
   (cd "$OUT_DIR" && shasum -a 256 Scotch.dmg > Scotch.dmg.sha256)
 

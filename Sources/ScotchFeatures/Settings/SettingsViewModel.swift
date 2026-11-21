@@ -1,5 +1,6 @@
 import Foundation
 import ScotchDomain
+import ScotchRuntime
 
 @MainActor
 public final class SettingsViewModel: ObservableObject {
@@ -22,6 +23,26 @@ public final class SettingsViewModel: ObservableObject {
     public func save(using persist: @MainActor (AppSettings) async -> Void) async {
         await persist(settings)
         statusMessage = "Saved settings."
+    }
+
+    @Published public var cacheBytes: Int64?
+    @Published public var clearingCache = false
+
+    public func refreshCache() async {
+        let cache = RuntimeDownloadCache(paths: container.paths)
+        cacheBytes = await Task.detached { try? cache.size() }.value
+    }
+
+    public func clearCache() async {
+        guard !clearingCache else { return }
+        clearingCache = true
+        defer { clearingCache = false }
+        let cache = RuntimeDownloadCache(paths: container.paths)
+        do {
+            let bytes = try await Task.detached { try cache.clear() }.value
+            statusMessage = "Cleared " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) + " of downloaded packages."
+        } catch { statusMessage = error.localizedDescription }
+        await refreshCache()
     }
 
     public func refreshManifest() async {

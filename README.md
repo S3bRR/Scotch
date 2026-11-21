@@ -18,7 +18,7 @@ Scotch will download Wine, DXVK, DXMT, and the other backends automatically on f
 
 ## Updating Scotch
 
-Use **Update** in the main window or app menu. One flow checks Scotch and approved Wine/graphics updates, reports what is changing, and installs eligible updates. App replacement preserves bottles, saves, settings, and custom locations. Existing bottles stay on their working runtime; newly created bottles use the updated default. **Bottle Runtime** can switch an existing bottle after taking a recoverable snapshot.
+Use **Update** in the main window or app menu. One flow checks Scotch and approved Wine/graphics updates, reports what is changing, and installs eligible updates. App replacement preserves bottles, saves, settings, and custom locations. Existing bottles stay on their working runtime; newly created bottles use the updated default. **Bottle Runtime** can switch an existing bottle in place without copying the prefix.
 
 Users upgrading from a build without the updater must replace Scotch.app manually once. Quit Scotch, drag the new app into Applications, and replace the old app. Keep Application Support and custom bottle folders in place. Do not run Uninstall as an update step.
 
@@ -46,7 +46,7 @@ Scotch is a native SwiftUI shell around other people's hard work. The app itself
 | Component | Project | What it does |
 |---|---|---|
 | Core compatibility layer | **[Wine Staging 11.16](https://www.winehq.org/)** (via [Gcenx's macOS builds](https://github.com/Gcenx/macOS_Wine_builds)) | Translates Win32 API calls to macOS equivalents. Everything else on this list sits on top of Wine. |
-| DirectX 10/11 → Vulkan → Metal | **[DXVK 1.10.3](https://github.com/Gcenx/DXVK-macOS)** (Gcenx's macOS port of [doitsujin/dxvk](https://github.com/doitsujin/dxvk)) + **[MoltenVK 1.4.0](https://github.com/KhronosGroup/MoltenVK)** | Widest compatibility path. Default backend for new bottles. Gcenx's macOS build is DX10/11 only (`d3d9`/`dxgi` are not shipped). |
+| DirectX 10/11 → Vulkan → Metal | **[DXVK 1.10.3](https://github.com/Gcenx/DXVK-macOS)** (Gcenx's macOS port of [doitsujin/dxvk](https://github.com/doitsujin/dxvk)) + **[MoltenVK 1.4.0](https://github.com/KhronosGroup/MoltenVK)** | DirectX 10/11 option. Gcenx's macOS build is DX10/11 only (`d3d9`/`dxgi` are not shipped). |
 | DirectX 10/11 → Metal (native) | **[DXMT 0.80](https://github.com/3Shain/dxmt)** by 3Shain | Native-Metal alternative for D3D11 titles. Better Apple Silicon perf than DXVK for the games it supports. |
 | DirectX 11/12 → Metal (native) | **[D3DMetal 3.0](https://developer.apple.com/games/game-porting-toolkit/)** from Apple's Game Porting Toolkit 3 | Apple's own DX11/12 translation layer. Required for DX12 titles. |
 | OpenGL 4.6 → Vulkan → Metal | **[Mesa Zink 26.2.0](https://docs.mesa3d.org/drivers/zink.html)** (Windows build by [pal1000](https://github.com/pal1000/mesa-dist-win)) | Works around macOS 26's OpenGL deprecation by sidestepping Apple's CGL entirely. |
@@ -103,7 +103,7 @@ Other combinations may work but are unsupported.
    - Stock `winemac.so` from Wine 11.16 is used as-is. The old 11.6 OpenGL byte patch is not applied (it is ABI-specific to that build).
 3. It builds, ad-hoc signs, and verifies a `Wine.app` launcher bundle so Wine's child processes get a proper macOS foreground activation policy — without this, Wine's windows are created invisible offscreen. Before launching, it verifies the wrapper and repairs unsigned or modified wrappers from earlier installs.
 4. When you create a bottle, Scotch creates a Wine prefix with `wineboot --init`, checks that 32-bit (WoW64) programs can run (repairing with `wineboot -u` once if not), then runs `winecfg` for the selected Windows version, then winetricks corefonts.
-5. When you run an `.exe`, Scotch selects the matching engine, installs native DXVK/Zink DLLs or resolves builtin DXMT/D3DMetal modules, sets `WINEDLLOVERRIDES`, and launches via `open -n -a Wine.app --env …` so the selected bottle and graphics environment reach Wine. Engine changes create a complete prefix recovery snapshot first.
+5. When you run an `.exe`, Scotch selects the matching engine, installs native DXVK/Zink DLLs or resolves builtin DXMT/D3DMetal modules, sets `WINEDLLOVERRIDES`, and launches via `open -n -a Wine.app --env …` so the selected bottle and graphics environment reach Wine. Backend and Wine engine changes do not automatically back up the prefix.
 
 All Scotch data lives under `~/Library/Application Support/com.s3brr.Scotch/` (runtime, bottles, settings, logs, winetricks cache). Older installs that used `~/Library/Containers/com.s3brr.Scotch` and `~/Library/Logs/com.s3brr.Scotch` are migrated on launch and removed by Uninstall.
 
@@ -154,6 +154,7 @@ Scotch is [GPL-3.0](./LICENSE), inherited from Wine. All included third-party co
 - Wine, DXVK, DXMT, Mesa, Zink — each under their respective upstream licenses
 - D3DMetal — Apple's GPTK Beta License (redistributed; removal on request)
 
-New bottles default to Auto in the main Backend picker. Per-application manual
-overrides remain available in Program Settings; existing bottle choices are
-preserved. See [automatic backends](Docs/automatic-backends.md).
+New bottles default to **D3DMetal (DX11/12)**. Former Auto bottles adopt this
+default; explicit bottle choices are preserved. Auto and manual overrides are
+still available per application in Program Settings. **Settings → Storage →
+Clear Download Cache** removes downloaded installers without deleting games or runtimes. See [automatic backends](Docs/automatic-backends.md).

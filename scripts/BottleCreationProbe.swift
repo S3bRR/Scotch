@@ -55,6 +55,9 @@ import ScotchRuntime
         let logger = ProbeLogger(), store = PlistStore(), runner = DefaultProcessRunner()
         try fm.createDirectory(at: paths.applicationSupportDirectory, withIntermediateDirectories: true)
         try fm.copyItem(at: libraries, to: paths.librariesDirectory)
+        // An older installed test fixture may contain development headers.
+        let headers = paths.librariesDirectory.appending(path: "MetalEngine/Engine/include")
+        if fm.fileExists(atPath: headers.path) { try fm.removeItem(at: headers) }
         let logs = LogStore(logsDirectory: paths.logsDirectory)
         let runtime = WineRuntimeService(paths: paths, processRunner: runner, fileSystem: LocalFileSystem(), logger: logger, logStore: logs, envAssembler: EnvironmentAssembler(paths: paths))
         let fonts = WinetricksService(paths: paths, fileSystem: LocalFileSystem(), logger: logger)
@@ -71,14 +74,14 @@ import ScotchRuntime
             bottle = created
             try check(created.setupWarningMessage == nil, created.setupWarningMessage ?? "Unexpected setup warning")
             try check(created.isAvailable && !created.inFlight && created.setupProgress == 1, "Bottle was not finalized")
-            try check(created.settings.backend.automatic && created.settings.wine.windowsVersion == .win11, "Windows 11 / Auto default lost")
+            try check(created.settings.backend.backend == .d3dmetal && created.settings.wine.windowsVersion == .win11, "Windows 11 / D3DMetal default lost")
             let directory = created.directoryURL.appending(path: "drive_c/windows/Fonts")
             let installed = Set(try fm.contentsOfDirectory(atPath: directory.path).map { $0.lowercased() })
             for font in ["andalemo.ttf", "arial.ttf", "comic.ttf", "cour.ttf", "georgia.ttf", "impact.ttf", "times.ttf", "trebuc.ttf", "verdana.ttf", "webdings.ttf"] {
                 try check(installed.contains(font), "Core font missing: \(font)")
             }
             let listed = await repository.loadBottles()
-            try check(listed.contains(where: { $0.id == created.id && $0.settings.backend.automatic }), "Published bottle did not retain Auto")
+            try check(listed.contains(where: { $0.id == created.id && $0.settings.backend.backend == .d3dmetal }), "Published bottle did not retain D3DMetal")
             let log = try String(contentsOf: created.directoryURL.appending(path: "winetricks.log"), encoding: .utf8)
             for verb in ["andale", "arial", "comicsans", "courier", "georgia", "impact", "times", "trebuchet", "verdana", "webdings"] {
                 try check(log.split(separator: "\n").contains(Substring(verb)), "Font verb was not registered: \(verb)")
@@ -86,7 +89,7 @@ import ScotchRuntime
             // Retry through the existing user's Winetricks action as well.
             _ = try await fonts.run(command: "corefonts", in: created, mode: .headless)
             await runtime.killBottle(created, timeout: 15)
-            say("Passed: complete Windows 11 bottle creation, all ten core font families, Winetricks retry and default Auto persistence.")
+            say("Passed: complete Windows 11 bottle creation, all ten core font families, Winetricks retry and default D3DMetal persistence.")
         } catch {
             if let bottle { await runtime.killBottle(bottle, timeout: 15) }
             say("Disposable diagnostics retained at \(paths.applicationSupportDirectory.path)")

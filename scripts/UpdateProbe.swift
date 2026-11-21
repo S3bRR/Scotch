@@ -39,6 +39,16 @@ struct UpdateProbe {
         let fm = FileManager.default
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: root); try? fm.removeItem(at: paths.cachesDirectory) }
+        let cache = RuntimeDownloadCache(paths: paths)
+        let cacheDir = paths.cachesDirectory.appending(path: "RuntimePackages")
+        let archive = cacheDir.appending(path: String(repeating: "a", count: 64))
+        let keep = paths.cachesDirectory.appending(path: "keep")
+        try write("keep", to: keep)
+        try write("archive", to: archive)
+        try fm.createSymbolicLink(at: cacheDir.appending(path: String(repeating: "b", count: 64)), withDestinationURL: keep)
+        try expect(try cache.size() == 7, "Cache measurement included unrelated files")
+        try expect(try cache.clear(activity: UpdateActivity(processCheck: { false })) == 7, "Cache did not clear the package")
+        try expect(try cache.size() == 0 && fm.fileExists(atPath: keep.path), "Cache cleanup touched unrelated data")
         let network = ProbeNetwork()
         let engine = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SCOTCH_TEST_ENGINE_IMAGE"] ?? repo.appending(path: ".build/runtime-fixtures/WineForge-0.6.0.3.dmg").path)
         await network.setDownload(MetalEngineInstallation.asset.downloadURL, data: try Data(contentsOf: engine, options: .mappedIfSafe))
@@ -199,11 +209,23 @@ struct UpdateProbe {
         let worker = WineRuntimeService(paths: paths, processRunner: DefaultProcessRunner(), fileSystem: LocalFileSystem(), logger: ProbeLogger(), logStore: LogStore(logsDirectory: paths.logsDirectory), envAssembler: EnvironmentAssembler(paths: paths))
         let routed = await worker.makeShellEnvironment(for: bottle)
         try expect(routed["PATH"]?.contains("RuntimeSets/" + target.id) == true, "Service ignored bottle runtime")
-        try write("new progress", to: bottleURL.appending(path: "drive_c/users/steam/Saves/save.dat"))
+        let recovery = bottleURL.deletingLastPathComponent().appending(path: ".ScotchPrefixBackups/\(bottleURL.lastPathComponent)")
+        try expect(!fm.fileExists(atPath: recovery.deletingLastPathComponent().path), "Runtime switch created a backup directory")
+        let savePath = "drive_c/users/steam/Saves/save.dat"
+        try expect(try String(contentsOf: bottleURL.appending(path: savePath), encoding: .utf8) == "saved progress", "Runtime switch changed the save")
+
+        // An existing snapshot from an old version can still be activated in place.
+        try write("new progress", to: bottleURL.appending(path: savePath))
+        let snapshot = recovery.appending(path: "snapshot-legacy")
+        try write("saved progress", to: snapshot.appending(path: savePath))
+        try await store.write(settings, to: snapshot.appending(path: BottleSettings.metadataFileName))
+        try write(snapshot.lastPathComponent, to: recovery.appending(path: "LatestSnapshot"))
         let restored = try await manager.restore(for: bottle)
         try expect(restored.settings.runtimeSetID == nil, "Original runtime selection not restored")
-        try expect(try String(contentsOf: bottleURL.appending(path: "drive_c/users/steam/Saves/save.dat"), encoding: .utf8) == "saved progress", "Original save not restored")
-        print("Passed: runtime routing and full prefix snapshot/restore preserve recoverable game data")
+        try expect(try String(contentsOf: bottleURL.appending(path: savePath), encoding: .utf8) == "saved progress", "Original save not restored")
+        try expect(try String(contentsOf: snapshot.appending(path: savePath), encoding: .utf8) == "new progress", "The exchanged directory lost the current save")
+        try expect(try Set(fm.contentsOfDirectory(atPath: recovery.path)) == ["LatestSnapshot", "snapshot-legacy"], "Restoring created another directory")
+        print("Passed: runtime routing and legacy snapshot exchange without copying a prefix")
 
         try write("unreadable catalog", to: paths.bottleCatalogURL)
         do { try await store.write(catalog, to: paths.bottleCatalogURL); throw ProbeError("Corrupt catalog overwritten") } catch is DecodingError {}

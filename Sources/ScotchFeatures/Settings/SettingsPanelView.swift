@@ -45,6 +45,19 @@ public struct SettingsPanelView: View {
                     }
                 }
 
+                Section("Storage") {
+                    HStack {
+                        Button("Clear Download Cache") { Task { await viewModel.clearCache() } }
+                            .disabled(viewModel.cacheBytes == 0 || viewModel.clearingCache)
+                        Spacer()
+                        if let bytes = viewModel.cacheBytes {
+                            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                                .foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
+                    Text("Removes downloaded installers, not games or installed runtimes. Repairs may download them again.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Runtime Versions") {
                     if let manifest = viewModel.runtimeManifest {
                         versionRow(label: "Wine", value: manifest.wineVersion)
@@ -133,6 +146,7 @@ public struct SettingsPanelView: View {
                 }
             }
             .task {
+                await viewModel.refreshCache()
                 await viewModel.refreshUninstallPreview()
             }
             .onChange(of: viewModel.includeBottlesInUninstall) { _, _ in

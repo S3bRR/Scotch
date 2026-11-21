@@ -216,13 +216,16 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             throw RuntimeInstallerError.downloadFailed("Invalid asset filename")
         }
         let destination = directory.appending(path: asset.name)
-        let cache = asset.sha256.map { paths.cachesDirectory.appending(path: "RuntimePackages/" + $0.lowercased()) }
+        let cacheDir = RuntimeDownloadCache(paths: paths).directory
+        let cache = asset.sha256.map { cacheDir.appending(path: $0.lowercased()) }
         if let cache, fileSystem.fileExists(at: cache), let expected = asset.sha256,
            (try? SHA256Checksum.hashFile(at: cache)) == expected.lowercased() {
             if fileSystem.fileExists(at: destination) { try fileSystem.removeItem(at: destination) }
-            try fileSystem.copyItem(at: cache, to: destination)
-            reportBytes(asset.size)
-            return destination
+            // Another process may clear the cache. A cache miss must not break setup.
+            if (try? fileSystem.copyItem(at: cache, to: destination)) != nil {
+                reportBytes(asset.size)
+                return destination
+            }
         }
         do {
             let temporaryFile = try await networkClient.download(from: NetworkRequest(url: asset.downloadURL))
@@ -237,10 +240,12 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             if let expectedChecksum = asset.sha256 {
                 try verifyChecksum(expectedChecksum, for: destination, assetName: asset.name)
             }
-            let contentCache = try cache ?? paths.cachesDirectory.appending(path: "RuntimePackages/" + SHA256Checksum.hashFile(at: destination))
-            try fileSystem.createDirectory(at: contentCache.deletingLastPathComponent())
-            if fileSystem.fileExists(at: contentCache) { try fileSystem.removeItem(at: contentCache) }
-            try fileSystem.copyItem(at: destination, to: contentCache)
+            let contentCache = try cache ?? cacheDir.appending(path: SHA256Checksum.hashFile(at: destination))
+            try fileSystem.createDirectory(at: cacheDir)
+            let staged = cacheDir.appending(path: ".partial-" + UUID().uuidString)
+            defer { try? fileSystem.removeItem(at: staged) }
+            try fileSystem.copyItem(at: destination, to: staged)
+            guard rename(staged.path, contentCache.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             reportBytes(asset.size)
             return destination
         } catch let NetworkClientError.nonSuccessStatus(_, status) {
@@ -546,7 +551,11 @@ public actor RuntimeInstallerService: RuntimeInstallerProtocol {
             arguments: ["detach", mount.path], displayName: "Eject matched engine image", timeout: 30)
         do {
             let resources = mount.appending(path: "WineForge.app/Contents/Resources")
-            try fileSystem.copyItem(at: resources.appending(path: "Engine/WineForgeCore"), to: destination.appending(path: "Engine"))
+            let engine = destination.appending(path: "Engine")
+            try fileSystem.createDirectory(at: engine)
+            for item in try fileSystem.contentsOfDirectory(at: resources.appending(path: "Engine/WineForgeCore")) where item.lastPathComponent != "include" {
+                try fileSystem.copyItem(at: item, to: engine.appending(path: item.lastPathComponent))
+            }
             try fileSystem.copyItem(at: resources.appending(path: "Licenses"), to: destination.appending(path: "Licenses"))
             // WineForge's engine omits Mono/Gecko. Without the matching shared
             // packages, its first prefix update can open an installer and block

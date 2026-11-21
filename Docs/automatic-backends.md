@@ -1,11 +1,9 @@
-# Automatic application backends — build 15
+# Application graphics backends
 
-The main Backend picker offers Auto first. New bottles default to Auto; existing
-bottles retain their explicit renderer until Auto is selected. Auto is a saved
-policy separate from the renderer currently installed in the prefix. The card
-shows that current renderer while keeping Auto selected after a launch.
-
-A program's default Use Bottle Setting inherits this policy. Open its context
+The main Backend picker selects a renderer directly. New bottles and bottles
+previously set to Auto use D3DMetal (DX11/12). Explicit selections are retained.
+Applications inherit the bottle renderer unless their program profile opts into
+Auto or chooses a different backend. Open the program’s context
 menu → Program Settings → Graphics to inspect architecture, APIs, recommendation,
 reason and missing runtime components. Auto inspects the executable without
 running it; Choose Backend stores an explicit per-application manual override
@@ -34,20 +32,16 @@ only records what was launched; it never marks rendering as working. After
 checking the application, press Remember Most Recent Launch as Working in its
 settings. Forget Working Choice takes effect when Save is pressed.
 
-Full-prefix backups include installed games as well as saves and registry state.
-Large bottles need sufficient space; this initial implementation favors recovery
-over minimizing backup size.
-
 The resolved graphics configuration is still bottle-wide. A different
 application's launch may change the bottle's selected backend. Such a change
-requires idle Wine processes, creates a complete recovery snapshot, validates
-the installed backend first and transfers maintenance directly into a launch
+requires idle Wine processes, validates the installed backend without copying
+the bottle and transfers maintenance directly into a launch
 lease. Another launch, manual backend change or update cannot replace that
 configuration during the protected transition. Saves and settings stay in the
 prefix. Launches needing the same configuration may share the engine.
 
-The matched Wine engine is now used for all backends. A legacy bottle receives
-a full snapshot before its first adoption. Steam's helper has a separate,
+The matched Wine engine is used for all backends, including when a legacy
+bottle first adopts it. Steam's helper has a separate,
 path-scoped engine policy; games retain their selected renderer.
 
 EXE programs start directly through Wine.app with their executable directory as
@@ -61,7 +55,7 @@ silently replaced with defaults.
 
 `bash scripts/test_program_graphics.sh` tests parser fixtures, delayed and local
 dependencies, malformed files, content changes, manual/working priorities,
-missing backends, idle guards, maintenance-to-launch transfer, snapshots and
+missing backends, idle guards, maintenance-to-launch transfer, backup-free backend changes and
 future profile preservation. Runtime availability is simulated only for the
 isolated metadata transition tests; live rendering checks use real verified
 runtime files.

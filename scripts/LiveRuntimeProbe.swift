@@ -18,7 +18,6 @@ import ScotchRuntime
         let runtime = WineRuntimeService(paths: paths, processRunner: runner, fileSystem: LocalFileSystem(), logger: logger, logStore: LogStore(logsDirectory: paths.logsDirectory), envAssembler: EnvironmentAssembler(paths: paths))
         var bottle = BottleSummary(id: BottleID(rawValue: "smoke"), directoryURL: paths.applicationSupportDirectory.appending(path: "Bottles/smoke"), settings: BottleSettings(), isAvailable: true)
         bottle.settings.backend.backend = .dxvk
-        bottle.settings.backend.automatic = false
         var failure: Error?
         do {
             say("Downloading actual pinned runtime releases through URLSession…")
@@ -122,10 +121,10 @@ import ScotchRuntime
             // the expected backend directly in the test.
             for (name, expectedBackend, expectedOutput) in [("ZinkSmoke.exe", TranslationBackend.zink, "OpenGL transform feedback=3,5,7,9"), ("D3D12AutoSmoke.exe", .d3dmetal, "D3D12 readback=")] {
                 await runtime.killBottle(bottle, timeout: 10)
-                var reset = bottle.settings; reset.backend.backend = .dxvk; reset.backend.glZinkEnabled = false; reset.backend.automatic = true
+                var reset = bottle.settings; reset.backend.backend = .dxvk; reset.backend.glZinkEnabled = false
                 try await manager.switchBackend(for: bottle, settings: reset); bottle.settings = reset
                 let executable = probes.appending(path: name)
-                let program = ProgramSettings()
+                var program = ProgramSettings(); program.graphicsMode = .automatic
                 try await ProgramSettingsFiles.save(program, for: executable, in: bottle.directoryURL)
                 try await runtime.runProgram(at: executable, arguments: [], bottle: bottle, extraEnvironment: [:])
                 bottle.settings = try await PlistStore().read(BottleSettings.self, from: bottle.directoryURL.appending(path: BottleSettings.metadataFileName))
@@ -138,7 +137,7 @@ import ScotchRuntime
                 } while !text.contains(expectedOutput) && Date() < deadline
                 try check(text.contains(expectedOutput), "Auto-selected backend did not perform real GPU rendering")
                 let savedProgram = try ProgramSettingsFiles.load(for: executable, in: bottle.directoryURL)
-                try check(bottle.settings.backend.automatic && savedProgram.graphicsMode == .bottle, "Bottle Auto was not inherited by the default program profile")
+                try check(savedProgram.graphicsMode == .automatic, "Program Auto was not preserved")
                 try check(savedProgram.lastGraphicsLaunch?.backend == expectedBackend && savedProgram.confirmedGraphics == nil, "Auto marked an unconfirmed launch as working")
                 say("Passed: automatic API detection, protected selection, actual GPU rendering and launch recording, \(name)")
             }
@@ -157,18 +156,19 @@ import ScotchRuntime
 
             }
             await runtime.killBottle(bottle, timeout: 10)
-            let restored = try await manager.restore(for: bottle)
-            try check(try String(contentsOf: save, encoding: .utf8) == "preserved save", "Recovery snapshot lost the original save")
-            bottle = restored
-            // Simulate an older app's already-selected Metal bottle with no
-            // engine marker. Its first launch must create a recovery snapshot.
+            let recovery = bottle.directoryURL.deletingLastPathComponent().appending(path: ".ScotchPrefixBackups")
+            try check(!fm.fileExists(atPath: recovery.path), "Graphics changes created a backup directory")
+            // An older bottle can have Metal selected with no engine marker.
             bottle.settings.backend.backend = .dxmt
             try await PlistStore().write(bottle.settings, to: bottle.directoryURL.appending(path: BottleSettings.metadataFileName))
-            try? fm.removeItem(at: bottle.directoryURL.appending(path: ".ScotchWineEngine"))
+            let marker = bottle.directoryURL.appending(path: ".ScotchWineEngine")
+            try fm.removeItem(at: marker)
             try await runtime.prepareBottleForLaunch(bottle)
-            try check(await manager.hasSnapshot(for: bottle), "Legacy engine adoption has no recovery snapshot")
+            try check(fm.fileExists(atPath: marker.path), "Legacy engine adoption did not set its marker")
+            try check(!fm.fileExists(atPath: recovery.path), "Legacy engine adoption created a backup directory")
+            try check(try String(contentsOf: save, encoding: .utf8) == "preserved save", "Graphics changes modified a save")
             await runtime.killBottle(bottle, timeout: 10)
-            say("Passed: installed backends, additive Zink, legacy engine adoption, and recoverable prefix/save preservation")
+            say("Passed: installed backends, additive Zink, and legacy engine adoption without copying the prefix")
 
         } catch { failure = error }
         // Stop only this disposable prefix, using each of its own matching servers.

@@ -633,9 +633,7 @@ public final class BottleDetailViewModel: ObservableObject {
     }
 
     private func compatibilityInputsChanged(from old: BottleSettings, to new: BottleSettings) -> Bool {
-        var previousBackend = old.backend
-        previousBackend.automatic = new.backend.automatic
-        return previousBackend != new.backend || old.gpu != new.gpu
+        old.backend != new.backend || old.gpu != new.gpu
     }
 
     private func makeShellEnvironmentCommand(from environment: [String: String]) -> String {

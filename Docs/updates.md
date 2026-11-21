@@ -2,23 +2,23 @@
 
 The Update command in the main window and app menu runs one flow for both Scotch and approved runtime updates. It reports each part separately, installs compatible runtimes first, then authenticates/replaces/relaunches Scotch. Every accepted app update records a one-day continuation intent so the new build finishes checking runtimes and its bundled graphics profile after relaunch. A newer runtime requiring that app is then installed in the same Update flow. Games and bottle operations block installation; they are not killed by the updater.
 
-Existing bottles retain their runtime selection. Newly created bottles use the latest installed default runtime. Bottle Runtime allows switching an existing bottle after a complete prefix snapshot, with Restore Last Snapshot for recovery. Snapshots are stored on the bottle's own volume under `.ScotchPrefixBackups`, beside its parent directory, and retained rather than silently deleting game data. Keep enough space for a full copy. External symlink targets are not duplicated by a prefix snapshot.
+Existing bottles retain their runtime selection. Newly created bottles use the latest installed default runtime. Bottle Runtime switches existing bottles in place without making a full copy. Older snapshots live beside the bottle under `.ScotchPrefixBackups`; the app leaves them in place and offers **Swap with Previous Snapshot** when one is available.
 
 ## Local build and verification
 
 Use native SwiftPM, as in the 1.2.x releases:
 
 ```sh
-SCOTCH_RELEASE_DIR="$PWD/.release/build16" SWIFT_BUILD_FLAGS='--build-system native' CODESIGN_IDENTITY=- bash scripts/package_release.sh
-bash scripts/verify_release_bundle.sh .release/build16/Scotch.app
+SCOTCH_RELEASE_DIR="$PWD/.release/build18" SWIFT_BUILD_FLAGS='--build-system native' CODESIGN_IDENTITY=- bash scripts/package_release.sh
+bash scripts/verify_release_bundle.sh .release/build18/Scotch.app
 bash scripts/test_runtime_installation.sh
 bash scripts/test_updates.sh
-python3 scripts/test_app_updater.py --app .release/build16/Scotch.app
+python3 scripts/test_app_updater.py --app .release/build18/Scotch.app
 ```
 
 The last test uses two isolated updater-enabled app bundles, a loopback HTTP server, signed appcast/archive, unique test preferences, and a fixture save/catalog. It verifies real Sparkle replacement, relaunch, and subsequent detection that the updated build is current. It does not install a build into Applications or modify the real Scotch data directory. It requires the local signing tools and Keychain key described below, and an idle Wine environment. Automated feed checks in CI never require private keys.
 
-Sparkle is pinned in Package.swift and Package.resolved and linked only by ScotchApp. The packaging script embeds and signs its framework and nested helpers before signing Scotch. Both app and QuickLook versions are 1.2.4, build 16 for this release. Minimum macOS remains 26.0. Existing ad-hoc signing is retained; Developer ID/notarization has not been added.
+Sparkle is pinned in Package.swift and Package.resolved and linked only by ScotchApp. The packaging script embeds and signs its framework and nested helpers before signing Scotch. Both app and QuickLook versions are 1.2.5, build 18 for this release. Minimum macOS remains 26.0. Existing ad-hoc signing is retained; Developer ID/notarization has not been added.
 
 ## Signing keys
 
@@ -37,7 +37,7 @@ To install the matching tools on the release Mac, download Sparkle 2.10.1's offi
 2. Create a local signed appcast and signed update archive:
 
    ```sh
-   python3 scripts/updates/prepare_appcast.py --archive .release/build16/Scotch.dmg --tag v1.2.4 --output .release/build16/appcast --notes Docs/releases/1.2.4.md
+   python3 scripts/updates/prepare_appcast.py --archive .release/build18/Scotch.dmg --tag v1.2.5 --output .release/build18/appcast --notes Docs/releases/1.2.5.md
    ```
 
    This uses the local Keychain, verifies the resulting feed, and never uploads anything. The production archive URL points to the versioned GitHub release asset.
@@ -76,7 +76,7 @@ python3 scripts/updates/verify_public_assets.py --appcast updates/appcast.xml --
 
 Test against a signed local feed before promoting a new set. Never serve candidates immediately from upstream without layout, macOS/Wine, and appropriate game validation.
 
-Runtime files are staged under RuntimeSets/staging-UUID. After verification and signing of Wine.app, the complete set is moved to RuntimeSets/ID. One atomic RuntimeSelection.plist write commits the new default. A crash before that point leaves the previous default active; an interrupted stage is ignored and cleaned up during a subsequent exclusive install. Archives are cached by content hash and revalidated on reuse, including archives initially fetched during bootstrap. A damaged selected set is offered for repair by Update, rebuilt from verified cache packages, and atomically exchanged into place after games have closed. Old runtime sets remain available for selected bottles and rollback; automatic pruning of runtime sets/prefix snapshots is deliberately not performed in this first implementation.
+Runtime files are staged under RuntimeSets/staging-UUID. After verification and signing of Wine.app, the complete set is moved to RuntimeSets/ID. One atomic RuntimeSelection.plist write commits the new default. A crash before that point leaves the previous default active; an interrupted stage is ignored and cleaned up during a subsequent exclusive install. Archives are cached by content hash and revalidated on reuse, including archives initially fetched during bootstrap. A damaged selected set is offered for repair by Update, rebuilt from verified cache packages, and atomically exchanged into place after games have closed. Old runtime sets remain available for selected bottles and rollback; automatic pruning of runtime sets or legacy snapshots is deliberately not performed in this first implementation.
 
 ## Weekly discovery
 
@@ -86,10 +86,10 @@ runtime-candidates.yml runs weekly after it exists on the default branch and sup
 
 Before app replacement, small metadata snapshots are stored under Application Support/UpdateBackups with a Locations.plist map. The last five metadata snapshots are retained. A corrupt catalog, corrupt program preferences, or future bottle schema cannot be overwritten with defaults by the new PlistStore safeguards. An offline external bottle stays referenced in the catalog.
 
-A bottle runtime switch creates a full prefix snapshot before changing the runtime ID; ordinary app/runtime downloads do not change registry/save files or invoke wineboot. Restore copies the snapshot into a staging directory, atomically swaps it into the original bottle path, and retains the replaced prefix under a before-restore directory. Rolling back a runtime file alone is not advertised as rolling back a Wine prefix.
+A bottle runtime switch changes the runtime ID without copying or rolling back the prefix. Ordinary app/runtime downloads do not change registry or save files or invoke wineboot. Swapping with an older snapshot exchanges the two existing directories atomically without making another copy. The snapshot path then holds the previously active state.
 
 Keep regular user backups as well. Manually downgrading to an older Scotch build that predates these schema safeguards is not a tested migration path; restore a compatible snapshot when necessary.
 
 Build 12 includes full legacy graphics repair in the same Update flow. It uses the client-pinned archives and bundled support without depending on published feeds. MetalEngine, D3DMetal, DXMT, DXVK, Zink, the native support hashes, and the stock WineMac driver are checked. Libraries are cloned into an exclusive staging session, repaired and verified there, and atomically exchanged. The manifest changes only as part of that transaction. Failed repair preserves the previous files. Maximum uncached downloads are about 750 MB; verified cache hits avoid them. The repair state is recomputed after success.
 
-First use of a different Wine engine also snapshots the complete prefix, including an older bottle that already has a Metal backend selected but has no engine marker. Snapshot failure blocks the engine change. The original prefix and its metadata remain untouched during download/repair. Native source rebuild instructions and source distribution are in scripts/graphics/README.md; each release provides complete corresponding Wine/Mesa/Scotch source as ScotchGraphicsSources.tar.xz beside the DMG, with a SHA256 file and an in-app source-availability notice.
+First use of a different Wine engine also runs without a prefix backup. Close Wine processes before changing engines. The original prefix and its metadata remain untouched during download/repair. Native source rebuild instructions and source distribution are in scripts/graphics/README.md; each release provides complete corresponding Wine/Mesa/Scotch source as ScotchGraphicsSources.tar.xz beside the DMG, with a SHA256 file and an in-app source-availability notice.

@@ -352,8 +352,7 @@ public actor BottleRepository: BottleRepositoryProtocol {
         guard let bottle = bottles.first(where: { $0.id == id }) else { return }
         let changesEngine = [.d3dmetal, .dxmt].contains(bottle.settings.backend.backend) != [.d3dmetal, .dxmt].contains(settings.backend.backend)
         if changesEngine || bottle.settings.backend.backend != settings.backend.backend || bottle.settings.backend.glZinkEnabled != settings.backend.glZinkEnabled {
-            // Switching loaders requires an idle prefix and a complete recovery
-            // snapshot, just like changing the bottle's selected Wine version.
+            // Changing shared graphics configuration requires idle Wine processes.
             try await BottleRuntimeManager(paths: paths).switchBackend(for: bottle, settings: settings)
             return
         }

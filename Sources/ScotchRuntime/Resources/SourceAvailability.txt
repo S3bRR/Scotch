@@ -1,12 +1,12 @@
-Scotch 1.2.4 — corresponding native sources
+Scotch 1.2.5 — corresponding native sources
 
 The complete corresponding source for the modified WineForge/Wine and Mesa
 modules, Scotch, patches, original notices and build instructions is available
 as a separate download beside Scotch.dmg on the same release page:
 
-https://github.com/S3bRR/Scotch/releases/tag/v1.2.4
-https://github.com/S3bRR/Scotch/releases/download/v1.2.4/ScotchGraphicsSources.tar.xz
-https://github.com/S3bRR/Scotch/releases/download/v1.2.4/ScotchGraphicsSources.tar.xz.sha256
+https://github.com/S3bRR/Scotch/releases/tag/v1.2.5
+https://github.com/S3bRR/Scotch/releases/download/v1.2.5/ScotchGraphicsSources.tar.xz
+https://github.com/S3bRR/Scotch/releases/download/v1.2.5/ScotchGraphicsSources.tar.xz.sha256
 
 Extract with: tar -xf ScotchGraphicsSources.tar.xz
 Build instructions: Scotch/scripts/graphics/README.md

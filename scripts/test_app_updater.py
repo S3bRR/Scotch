@@ -89,6 +89,7 @@ def main():
                     "ScotchInfrastructure",
                     "ScotchRuntime",
                     "ScotchFeatures",
+                    "ScotchPE",
                 ]
                 for p in (BUILD / (target + ".build")).glob("*.o")
             ]

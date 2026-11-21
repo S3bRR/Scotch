@@ -12,7 +12,7 @@ if [[ $# -gt 0 ]]; then
   BUILD_DIR="$(swift build --build-system native -c release --show-bin-path)"
   swiftc -swift-version 6 -parse-as-library -I "$BUILD_DIR/Modules" scripts/SteamInstallProbe.swift \
     "$BUILD_DIR"/ScotchDomain.build/*.o "$BUILD_DIR"/ScotchInfrastructure.build/*.o \
-    "$BUILD_DIR"/ScotchRuntime.build/*.o "$BUILD_DIR"/ScotchFeatures.build/*.o -o .build/steam-tests/SteamInstallProbe
+    "$BUILD_DIR"/ScotchRuntime.build/*.o "$BUILD_DIR"/ScotchPE.build/*.o "$BUILD_DIR"/ScotchFeatures.build/*.o -o .build/steam-tests/SteamInstallProbe
   cp -R "$BUILD_DIR/Scotch_ScotchRuntime.bundle" .build/steam-tests/
   .build/steam-tests/SteamInstallProbe "$@"
 fi

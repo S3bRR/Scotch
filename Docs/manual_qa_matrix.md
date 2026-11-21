@@ -74,5 +74,5 @@ promotion. Passing synthetic rendering does not establish every game's support.
 | Flow | Expected result |
 | --- | --- |
 | Build 15 Windows 11 fonts | Full bottle creation installs all ten core font families with bundled cabextract under Finder's minimal PATH; no Homebrew dependency or missing-extractor warning. Retrying corefonts succeeds. |
-| Main Backend Auto | Auto is first in the picker and selected for a new bottle. Changing backends through Auto preserves that selection and shows the current renderer. |
-| Inheritance and migration | Programs with Use Bottle Setting inherit bottle Auto; per-program overrides win. Old explicit bottle backends stay manual after upgrade. |
+| Main Backend | New bottles show D3DMetal (DX11/12). Auto is not offered in the bottle picker. Former Auto bottles show D3DMetal; explicit selections persist on relaunch. |
+| Inheritance and migration | Programs with Use Bottle Setting inherit the selected renderer (D3DMetal by default); per-program overrides win. Old explicit bottle backends stay manual after upgrade. |

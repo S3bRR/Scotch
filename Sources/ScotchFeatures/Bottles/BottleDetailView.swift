@@ -1,4 +1,5 @@
 import SwiftUI
+import ScotchPE
 import AppKit
 import UniformTypeIdentifiers
 import ScotchDomain
@@ -259,15 +260,15 @@ public struct BottleDetailView: View {
             .padding(.horizontal, 4)
 
             HStack(spacing: ScotchTheme.Spacing.small) {
-                Image(systemName: viewModel.bottle.settings.backend.automatic ? "wand.and.stars" : backendIcon(for: viewModel.bottle.settings.backend.backend))
+                Image(systemName: backendIcon(for: viewModel.bottle.settings.backend.backend))
                     .font(.title2)
                     .foregroundStyle(ScotchTheme.accent)
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(viewModel.bottle.settings.backend.automatic ? "Auto" : viewModel.bottle.settings.backend.backend.displayName)
+                    Text(viewModel.bottle.settings.backend.backend.displayName)
                         .font(.body.weight(.medium))
-                    Text(viewModel.bottle.settings.backend.automatic ? "Chooses per application · Current: \(viewModel.bottle.settings.backend.backend.displayName)" : backendDescription(for: viewModel.bottle.settings.backend.backend))
+                    Text(backendDescription(for: viewModel.bottle.settings.backend.backend))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -276,9 +277,8 @@ public struct BottleDetailView: View {
                 Spacer()
 
                 Picker("Backend", selection: backendSelection) {
-                    Text("Auto").tag(Optional<TranslationBackend>.none)
                     ForEach(availableBackends, id: \.self) { backend in
-                        Text(backend.displayName).tag(Optional(backend))
+                        Text(backend.displayName).tag(backend)
                     }
                 }
                 .labelsHidden()
@@ -291,15 +291,14 @@ public struct BottleDetailView: View {
         }
     }
 
-    private var backendSelection: Binding<TranslationBackend?> {
+    private var backendSelection: Binding<TranslationBackend> {
         Binding(
-            get: { viewModel.bottle.settings.backend.automatic ? nil : viewModel.bottle.settings.backend.backend },
+            get: { viewModel.bottle.settings.backend.backend },
             set: { selected in
                 guard !savingBackend else { return }
                 savingBackend = true
                 var settings = viewModel.bottle.settings
-                settings.backend.automatic = selected == nil
-                if let selected { settings.backend.backend = selected }
+                settings.backend.backend = selected
                 Task {
                     defer { savingBackend = false }
                     await viewModel.saveSettings(settings)

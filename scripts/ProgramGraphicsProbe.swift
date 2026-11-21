@@ -45,32 +45,20 @@ import ScotchRuntime
         try Data("preserved game save".utf8).write(to: sentinel)
         let activity = UpdateActivity(processCheck: { false })
         let manager = ProgramGraphicsManager(paths: paths, activity: activity, availabilityCheck: { _, _, _ in nil })
-        try check(bottle.settings.backend.automatic, "New bottles default to Auto")
-        let legacyData = try PropertyListSerialization.data(fromPropertyList: ["backend": "dxmt"], format: .xml, options: 0)
-        let legacy = try PropertyListDecoder().decode(BottleBackendConfig.self, from: legacyData)
-        try check(!legacy.automatic && legacy.backend == .dxmt, "Legacy explicit renderer stays manual")
-        let roundTrip = try PropertyListDecoder().decode(BottleSettings.self, from: PropertyListEncoder().encode(bottle.settings))
-        try check(roundTrip.backend.automatic, "Bottle Auto persists across relaunch")
-        let inherited = manager.recommend(dx12, executable: exe, bottle: bottle, settings: ProgramSettings())
-        try check(inherited.usesAuto && inherited.automatic && inherited.backend == .d3dmetal, "Default program inherits bottle Auto")
-        var manualBottle = bottle; manualBottle.settings.backend.automatic = false
-        try check(!manager.recommend(dx12, executable: exe, bottle: manualBottle, settings: ProgramSettings()).usesAuto, "Manual bottle does not enable Auto")
-        try pe(imports: ["d3d12.dll"]).write(to: exe)
-        try await PlistStore().write(manualBottle.settings, to: bottleDir.appending(path: BottleSettings.metadataFileName))
-        do {
-            let manualLaunch = try await manager.prepareLaunch(exe, bottle: manualBottle)
-            try check(manualLaunch.bottle.settings.backend.backend == .dxvk && manualLaunch.choice == nil, "Manual bottle was overridden by inherited Auto")
-            withExtendedLifetime(manualLaunch.lease) {}
+        try check(bottle.settings.backend.backend == .d3dmetal, "New bottles must default to D3DMetal")
+        for (record, expected): ([String: Any], TranslationBackend) in [
+            (["backend": "dxmt"], .dxmt), (["backend": "dxvk", "automatic": false], .dxvk),
+            (["backend": "dxvk", "automatic": true], .d3dmetal), (["dxvk": false], .none)
+        ] {
+            let data = try PropertyListSerialization.data(fromPropertyList: record, format: .xml, options: 0)
+            let decoded = try PropertyListDecoder().decode(BottleBackendConfig.self, from: data)
+            try check(decoded.backend == expected, "Unexpected migrated bottle backend")
         }
-        try await PlistStore().write(bottle.settings, to: bottleDir.appending(path: BottleSettings.metadataFileName))
-
-        // Exercise launch-time inheritance with no explicit application Auto setting.
-        try pe(imports: ["d3d12.dll"]).write(to: exe)
+        try pe(imports: ["opengl32.dll"]).write(to: exe)
         do {
-            let inheritedLaunch = try await manager.prepareLaunch(exe, bottle: bottle)
-            try check(inheritedLaunch.bottle.settings.backend.backend == .d3dmetal && inheritedLaunch.bottle.settings.backend.automatic, "Inherited Auto selects a renderer without disabling the policy")
-            bottle = inheritedLaunch.bottle
-            withExtendedLifetime(inheritedLaunch.lease) {}
+            let inherited = try await manager.prepareLaunch(exe, bottle: bottle)
+            try check(inherited.bottle.settings.backend.backend == .d3dmetal && inherited.choice == nil, "Default application profile overrode the bottle")
+            withExtendedLifetime(inherited.lease) {}
         }
         var settings = ProgramSettings(); settings.graphicsMode = .automatic
         let rec = ProgramGraphicsManager(paths: paths).recommend(dx12, executable: exe, bottle: bottle, settings: settings)
@@ -99,15 +87,16 @@ import ScotchRuntime
             try await manager.recordLaunch(exe, bottle: bottle, choice: prepared.choice)
             withExtendedLifetime(prepared.lease) {}
         }
-        let hasSnapshot = await BottleRuntimeManager(paths: paths, activity: activity).hasSnapshot(for: bottle)
-        try check(hasSnapshot, "Backend transition produced a recovery snapshot")
+        let recovery = root.appending(path: ".ScotchPrefixBackups")
+        try check(!FileManager.default.fileExists(atPath: recovery.path), "Launch-time backend switch created a backup directory")
+        try check(try Data(contentsOf: sentinel) == Data("preserved game save".utf8), "Launch-time backend switch changed saves")
         settings = try ProgramSettingsFiles.load(for: exe, in: bottleDir)
         settings.graphicsMode = .automatic
         settings = try await manager.confirmWorking(exe, bottle: bottle, settings: settings)
         let remembered = await manager.recommendation(for: exe, bottle: bottle, settings: settings)
         try check(remembered.remembered && remembered.backend == TranslationBackend.none, "User-confirmed choice is reused")
         var inheritConfirmation = settings; inheritConfirmation.graphicsMode = .bottle
-        try check(manager.recommend(ExecutableGraphicsInspector.inspect(exe), executable: exe, bottle: bottle, settings: inheritConfirmation).remembered, "Bottle Auto did not reuse the confirmed application choice")
+        try check(!manager.recommend(ExecutableGraphicsInspector.inspect(exe), executable: exe, bottle: bottle, settings: inheritConfirmation).remembered, "Inheriting a bottle unexpectedly activated the program Auto policy")
         var manual = settings; manual.graphicsMode = .manual; manual.manualBackend = .dxvk
         try check(manager.recommend(gl, executable: exe, bottle: bottle, settings: manual).backend == .dxvk, "Manual override takes priority over a remembered choice")
         var args = settings; args.arguments = "-different-renderer"
@@ -130,6 +119,13 @@ import ScotchRuntime
         do { try await ProgramSettingsFiles.save(ProgramSettings(), for: exe, in: bottleDir); throw ProbeError("Future profile overwritten") }
         catch is DecodingError { }
         try check(try Data(contentsOf: profile) == future, "Future application profile preserved")
+        var explicit = bottle.settings
+        explicit.backend.backend = .dxvk
+        try await BottleRuntimeManager(paths: paths, activity: activity).switchBackend(for: bottle, settings: explicit)
+        let persisted = try await PlistStore().read(BottleSettings.self, from: bottleDir.appending(path: BottleSettings.metadataFileName))
+        try check(persisted.backend.backend == .dxvk, "Explicit backend selection was not saved")
+        try check(!FileManager.default.fileExists(atPath: recovery.path), "Explicit backend selection created a backup directory")
+        try check(try Data(contentsOf: sentinel) == Data("preserved game save".utf8), "Explicit backend switch changed saves")
         let sleeper = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appending(path: "wine64-prefix-probe")
         let owned = Process(), other = Process()
         let otherPrefix = root.appending(path: "OtherBottle")
@@ -144,7 +140,7 @@ import ScotchRuntime
         try await Task.sleep(for: .milliseconds(100))
         try check(!owned.isRunning && other.isRunning, "Prefix-scoped stop touched another bottle or missed its own process")
         await WineProcessInspector.stopRemainingProcesses(in: otherPrefix)
-        print("Passed: PE architecture, normal/delay/dependency imports, malformed files, fingerprints, conservative policy, manual/working priorities, configuration invalidation, missing runtimes, idle gates, atomic launch lease, snapshots and future profiles")
+        print("Passed: PE architecture, normal/delay/dependency imports, malformed files, fingerprints, conservative policy, manual/working priorities, configuration invalidation, missing runtimes, idle gates, atomic launch lease, no-copy backend switches and future profiles")
     }
     static func check(_ value: @autoclosure () throws -> Bool, _ message: String) throws {
         guard try value() else { throw ProbeError(message) }

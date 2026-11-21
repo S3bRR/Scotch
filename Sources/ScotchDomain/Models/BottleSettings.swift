@@ -133,23 +133,19 @@ public struct BottleMetalConfig: Codable, Equatable, Sendable {
 
 public struct BottleBackendConfig: Codable, Equatable, Sendable {
     public var backend: TranslationBackend
-    /// Auto is a selection policy; backend remains the actual installed renderer.
-    public var automatic: Bool
     public var dxvkAsync: Bool
     public var dxvkHud: DXVKHUD
     public var glZinkEnabled: Bool
     public var steamBuiltinOpenGL: Bool
 
     public init(
-        backend: TranslationBackend = .dxvk,
-        automatic: Bool = true,
+        backend: TranslationBackend = .d3dmetal,
         dxvkAsync: Bool = true,
         dxvkHud: DXVKHUD = .off,
         glZinkEnabled: Bool = false,
         steamBuiltinOpenGL: Bool = false
     ) {
         self.backend = backend
-        self.automatic = automatic
         self.dxvkAsync = dxvkAsync
         self.dxvkHud = dxvkHud
         self.glZinkEnabled = glZinkEnabled
@@ -170,14 +166,14 @@ public struct BottleBackendConfig: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         // Existing bottles keep the renderer the user chose before Auto existed.
-        automatic = try container.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
-
-        if let rawBackend = try container.decodeIfPresent(String.self, forKey: .backend) {
-            backend = TranslationBackend(rawValue: rawBackend) ?? .dxvk
+        if try container.decodeIfPresent(Bool.self, forKey: .automatic) == true {
+            backend = .d3dmetal
+        } else if let rawBackend = try container.decodeIfPresent(String.self, forKey: .backend) {
+            backend = TranslationBackend(rawValue: rawBackend) ?? .d3dmetal
         } else if let legacyDXVKToggle = try container.decodeIfPresent(Bool.self, forKey: .dxvk) {
             backend = legacyDXVKToggle ? .dxvk : .none
         } else {
-            backend = .dxvk
+            backend = .d3dmetal
         }
 
         dxvkAsync = try container.decodeIfPresent(Bool.self, forKey: .dxvkAsync) ?? true
@@ -189,7 +185,6 @@ public struct BottleBackendConfig: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(backend.rawValue, forKey: .backend)
-        try container.encode(automatic, forKey: .automatic)
         try container.encode(dxvkAsync, forKey: .dxvkAsync)
         try container.encode(dxvkHud, forKey: .dxvkHud)
         try container.encode(glZinkEnabled, forKey: .glZinkEnabled)

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import QuickLookThumbnailing
-import ScotchRuntime
+import ScotchPE
 
 final class ThumbnailProvider: QLThumbnailProvider {
     override func provideThumbnail(

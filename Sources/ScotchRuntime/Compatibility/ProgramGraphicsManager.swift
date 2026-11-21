@@ -23,7 +23,7 @@ public struct ProgramGraphicsManager: Sendable {
     }
 
     public func recommend(_ analysis: ExecutableGraphicsAnalysis, executable: URL, bottle: BottleSummary, settings: ProgramSettings) -> ProgramGraphicsRecommendation {
-        let mode = settings.graphicsMode.resolved(in: bottle.settings.backend)
+        let mode = settings.graphicsMode
         let runtime = runtimeFingerprint(bottle)
         var result = ProgramGraphicsRecommendation(analysis: analysis, backend: nil, automatic: false, reason: analysis.explanation, availabilityIssue: nil, remembered: false, currentBackend: bottle.settings.backend.backend, usesAuto: mode == .automatic)
         let customGraphics = Set(["WINEDLLOVERRIDES", "WINEDLLPATH", "GRAPHICS_BACKEND", "WINE_D3D_CONFIG", "GALLIUM_DRIVER", "VK_DRIVER_FILES", "VK_ICD_FILENAMES"])
@@ -78,7 +78,7 @@ public struct ProgramGraphicsManager: Sendable {
         if configurationFingerprint(bottle, arguments: arguments, environment: environment) != configurationFingerprint(bottle, arguments: settings.parsedArguments(), environment: settings.effectiveEnvironment()) {
             settings.confirmedGraphics = nil
         }
-        if settings.graphicsMode.resolved(in: bottle.settings.backend) == .bottle {
+        if settings.graphicsMode == .bottle {
             return PreparedProgramGraphics(bottle: bottle, lease: try await unchangedLaunchLease(bottle), choice: nil)
         }
         var decisionSettings = settings

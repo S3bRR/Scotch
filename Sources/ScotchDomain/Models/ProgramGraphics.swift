@@ -5,9 +5,6 @@ public enum ProgramGraphicsMode: String, Codable, CaseIterable, Sendable {
     public var displayName: String {
         switch self { case .bottle: "Use Bottle Setting"; case .automatic: "Auto"; case .manual: "Choose Backend" }
     }
-    public func resolved(in bottle: BottleBackendConfig) -> Self {
-        self == .bottle && bottle.automatic ? .automatic : self
-    }
 }
 
 public struct ProgramGraphicsChoice: Codable, Equatable, Hashable, Sendable {

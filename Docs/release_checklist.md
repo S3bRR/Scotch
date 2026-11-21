@@ -9,7 +9,7 @@
   - `GraphicsSupport.tar.xz` and its generated verification hashes
 - [ ] Keep only Scotch.app and Applications in the mounted DMG.
 - [ ] Upload ScotchGraphicsSources.tar.xz and its checksum beside the DMG.
-- [ ] Run `python3 scripts/verify_release_artifacts.py .release/build16`.
+- [ ] Run `python3 scripts/verify_release_artifacts.py .release/build18`.
 - [ ] Confirm native modules have no local build/Homebrew dependencies and target macOS 26.
 
 ## Entitlements and Permissions
@@ -32,7 +32,7 @@
 - [ ] Follow `Docs/updates.md`; public deployment requires release approval.
 
 ## Final gate
-- [ ] Run `bash scripts/test_live_runtime.sh` on idle hardware: all backends, bitness, combined Zink, GUI launch, repair and prefix recovery.
+- [ ] Run `bash scripts/test_live_runtime.sh` on idle hardware: all backends, bitness, combined Zink, GUI launch, repair, and backup-free backend switching.
 - [ ] Run `bash scripts/test_runtime_installation.sh` (uses the pinned upstream Mesa archive; an existing archive can be passed as the first argument).
 - [ ] Run `scripts/verify_release_bundle.sh <path-to-Scotch.app>`.
 - [ ] Walk through `Docs/manual_qa_matrix.md`.

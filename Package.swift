@@ -35,13 +35,14 @@ let package = Package(
                 .process("Resources")
             ]
         ),
+        .target(name: "ScotchPE"),
         .target(
             name: "ScotchFeatures",
-            dependencies: ["ScotchDomain", "ScotchInfrastructure", "ScotchRuntime"]
+            dependencies: ["ScotchPE", "ScotchDomain", "ScotchInfrastructure", "ScotchRuntime"]
         ),
         .executableTarget(
             name: "ScotchThumbnail",
-            dependencies: ["ScotchRuntime"],
+            dependencies: ["ScotchPE"],
             exclude: [
                 "Info.plist",
                 "ScotchThumbnail.entitlements"

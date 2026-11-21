@@ -55,6 +55,7 @@ struct RuntimeInstallerProbe {
                     }
                     try require(!FileManager.default.fileExists(atPath: paths.librariesDirectory.appending(path: "Zink/\(architecture)/d3d10warp.dll").path), "Unrelated Mesa drivers must not be injected")
                 }
+                try require(!FileManager.default.fileExists(atPath: paths.librariesDirectory.appending(path: "MetalEngine/Engine/include").path), "Development headers installed")
                 try require(await installer.isRuntimeInstalled(), "Runtime must be ready after installation")
                 let restarted = makeInstaller(paths: paths, network: network)
                 try require(await restarted.currentManifest() == manifest, "Restart must accept the installed manifest")
